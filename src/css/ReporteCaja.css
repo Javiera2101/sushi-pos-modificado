@@ -1,0 +1,40 @@
+
+.reporte-container {
+    display: none;
+}
+
+/* CUANDO SE IMPRIME */
+@media print {
+    /* 1. Ocultar toda la aplicación */
+    body * {
+        visibility: hidden;
+    }
+
+    /* 2. Mostrar solo el reporte */
+    .reporte-container, .reporte-container * {
+        visibility: visible;
+        display: block !important;
+    }
+
+    /* 3. Posicionar el reporte en la hoja */
+    .reporte-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 80mm; /* Ancho de papel térmico */
+        max-width: 80mm;
+        padding: 0;
+        margin: 0;
+        background: white;
+        color: black;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 13px;
+    }
+
+    /* Utilidades simples para el reporte */
+    .text-center { text-align: center; }
+    .text-end { text-align: right; }
+    .fw-bold { font-weight: bold; }
+    .d-flex { display: flex; justify-content: space-between; }
+    .border-top-dashed { border-top: 1px dashed black; margin: 5px 0; padding-top: 2px;}
+}

@@ -1,0 +1,133 @@
+/* sushi/src/css/Ticket.css */
+
+/* Estilos generales del contenedor del ticket */
+.ticket-container {
+    width: 58mm;
+    background-color: white;
+    padding: 4px;
+    margin: 0 auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    color: black;
+    /* AJUSTE CLAVE: Aumentamos el interlineado para que las letras no se peguen verticalmente */
+    line-height: 1.5; 
+    box-sizing: border-box;
+}
+
+/* Imágenes dentro del ticket (Logo) */
+.ticket-container img {
+    display: block;
+    margin: 0 auto 15px auto; /* Más separación del logo al texto */
+    max-width: 90%;
+    filter: grayscale(100%) contrast(150%); 
+}
+
+/* Utilidades */
+.text-center { text-align: center; }
+.text-end { text-align: right; }
+.text-start { text-align: left; }
+.fw-bold { font-weight: bold; }
+.text-uppercase { text-transform: uppercase; }
+
+/* Líneas divisorias con mucho más aire */
+.linea-punteada {
+    border-top: 1px dashed black;
+    margin: 12px 0; /* AUMENTADO: De 8px a 12px para separar secciones claramente */
+    width: 100%;
+}
+
+.linea-punteada-doble {
+    border-top: 3px double black;
+    margin: 12px 0;
+    width: 100%;
+}
+
+/* Secciones */
+.items-section {
+    margin-top: 15px;
+    margin-bottom: 15px;
+}
+
+/* Separación extra IMPORTANTE entre cada producto */
+.items-section > div {
+    margin-bottom: 15px !important; /* Fuerza una separación grande entre cada sushi */
+    padding-bottom: 5px;
+}
+
+/* Estilos para datos de reparto */
+.datos-reparto {
+    margin-top: 15px;
+    border: 1px solid black;
+    padding: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.campo-escribir {
+    margin-bottom: 8px;
+}
+
+/* CONFIGURACIÓN CRÍTICA PARA IMPRESIÓN (SOLUCIÓN 1) */
+@media print {
+    /* Definimos explícitamente el tamaño del papel.
+       '58mm' es el ancho fijo. 
+       'auto' permite que el largo sea infinito (rollo continuo).
+    */
+    @page { 
+        margin: 0; 
+        size: 58mm auto; 
+    }
+
+    body { 
+        margin: 0 !important; 
+        padding: 0 !important; 
+        background-color: white !important; 
+        width: 100% !important;
+    }
+
+    .ticket-container {
+        /* Al definir @page en 58mm, podemos usar 100% aquí */
+        width: 100% !important; 
+        max-width: none !important;
+        
+        box-sizing: border-box !important;
+        margin: 0 !important; 
+        padding: 0 !important; 
+        
+        border: none !important;
+        overflow: visible !important; 
+        display: block !important;
+        visibility: visible !important;
+        background-color: white !important;
+        position: static !important;
+        
+        /* Forzamos el interlineado en impresión también */
+        line-height: 1.5 !important;
+        
+        word-wrap: break-word; 
+        overflow-wrap: break-word;
+    }
+    
+    /* Aseguramos que los textos internos hereden el interlineado */
+    .ticket-container * {
+        text-shadow: none !important;
+        box-shadow: none !important;
+        visibility: visible !important;
+        line-height: 1.4 !important; 
+    }
+
+    .ticket-container img {
+        display: block !important;
+        max-width: 100% !important;
+    }
+    
+    /* Mantenemos los márgenes de separación de Bootstrap */
+    .mb-2 {
+        margin-bottom: 12px !important;
+    }
+    
+    .my-2 {
+        margin-top: 12px !important;
+        margin-bottom: 12px !important;
+    }
+}
