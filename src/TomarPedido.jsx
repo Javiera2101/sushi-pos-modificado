@@ -15,19 +15,100 @@ import {
   doc, 
   Timestamp, 
   query, 
+  where,
+  limit,
+  orderBy,
   onSnapshot 
 } from 'firebase/firestore';
 
-// --- CONFIGURACIÓN DE FIREBASE (CON PROTECCIÓN CONTRA DUPLICADOS Y REFERENCEERROR) ---
+// --- COMPONENTE TICKET INTEGRADO (Para evitar errores de resolución de archivo) ---
+const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descripcion, logoUrl, cliente, hora, costoDespacho, direccion, telefono }) => {
+  const formatoPeso = (valor) => valor.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
+  const costoDespachoNum = parseInt(costoDespacho || 0);
+  const totalNum = parseInt(total || 0);
+  const subtotalProductos = totalNum - costoDespachoNum;
+
+  return (
+    <div className="ticket-container" style={{ padding: '10px', fontFamily: 'monospace', width: '280px', backgroundColor: 'white', color: 'black' }}>
+      <div style={{ textAlign: 'center', marginBottom: '10px' }}>
+        <h2 style={{ margin: '0' }}>ISAKARI SUSHI</h2>
+        <p style={{ margin: '0', fontSize: '12px' }}>Calle Comercio #1757</p>
+        <p style={{ margin: '0', fontSize: '12px' }}>+56 9 813 51797</p>
+        <h3 style={{ borderTop: '1px dashed black', borderBottom: '1px dashed black', padding: '5px 0', margin: '10px 0' }}>Mesa {numeroPedido}</h3>
+        {cliente && <p style={{ margin: '0', fontWeight: 'bold', textTransform: 'uppercase' }}>{cliente}</p>}
+        {hora && <p style={{ margin: '0' }}>Hora: {hora}</p>}
+        <p style={{ margin: '0', fontSize: '11px' }}>Fecha: {fecha}</p>
+      </div>
+
+      <div style={{ borderBottom: '1px dashed black', marginBottom: '5px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '12px' }}>
+          <span>CANT</span>
+          <span>PRODUCTO</span>
+          <span>TOTAL</span>
+        </div>
+      </div>
+
+      {orden.map((item, i) => (
+        <div key={i} style={{ marginBottom: '8px', fontSize: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ flex: '0 0 30px' }}>{item.cantidad}</span>
+            <span style={{ flex: '1' }}>{item.nombre}</span>
+            <span>{formatoPeso(item.precio * item.cantidad)}</span>
+          </div>
+          {item.observacion && (
+            <div style={{ backgroundColor: 'black', color: 'white', padding: '2px', textAlign: 'center', margin: '3px 0', fontWeight: 'bold' }}>
+              ★ {item.observacion} ★
+            </div>
+          )}
+        </div>
+      ))}
+
+      <div style={{ borderTop: '1px dashed black', paddingTop: '5px', marginTop: '5px' }}>
+        {costoDespachoNum > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+            <span>Subtotal</span>
+            <span>{formatoPeso(subtotalProductos)}</span>
+          </div>
+        )}
+        {costoDespachoNum > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold' }}>
+            <span>Despacho</span>
+            <span>{formatoPeso(costoDespachoNum)}</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 'bold', marginTop: '5px' }}>
+          <span>TOTAL</span>
+          <span>{formatoPeso(totalNum)}</span>
+        </div>
+      </div>
+
+      {tipoEntrega === 'REPARTO' && (direccion || telefono) && (
+        <div style={{ marginTop: '15px', borderTop: '1px solid black', paddingTop: '5px' }}>
+          <p style={{ margin: '0', fontWeight: 'bold', textAlign: 'center', fontSize: '12px' }}>DATOS DE DESPACHO</p>
+          <p style={{ margin: '2px 0', fontSize: '12px', wordBreak: 'normal' }}><strong>Dir:</strong> {direccion}</p>
+          <p style={{ margin: '2px 0', fontSize: '12px' }}><strong>Tel:</strong> {telefono}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- CONFIGURACIÓN DE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
 
-// Corregimos el error "app/duplicate-app" verificando si ya existe una instancia
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'isakari-pos';
+
+const POSIBLES_IDS = [
+    'sushi', 
+    'isakari-pos', 
+    'default-app-id', 
+    (typeof __app_id !== 'undefined' ? __app_id : 'sushi')
+];
+const APP_IDS_A_ESCANEAR = [...new Set(POSIBLES_IDS)];
 
 // --- UTILS ---
 const getLocalDate = () => {
@@ -35,7 +116,6 @@ const getLocalDate = () => {
   return now.toISOString().split('T')[0];
 };
 
-// Corregimos la detección de ipcRenderer para evitar TypeError: window.require is not a function
 const ipcRenderer = (function() {
   try {
     if (typeof window !== 'undefined' && typeof window.require === 'function') {
@@ -48,7 +128,6 @@ const ipcRenderer = (function() {
   return { send: () => {} };
 })();
 
-// Exportación nombrada para compatibilidad con App.jsx
 export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
   const [user, setUser] = useState(null);
   
@@ -65,7 +144,6 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
   const [descripcionGeneral, setDescripcionGeneral] = useState(ordenAEditar ? (ordenAEditar.descripcion || '') : '');
   const [horaPedido, setHoraPedido] = useState(ordenAEditar ? (ordenAEditar.hora_pedido || '') : new Date().toLocaleTimeString('es-CL', {hour: '2-digit', minute:'2-digit'}));
 
-  const [aplicarDescuento, setAplicarDescuento] = useState(ordenAEditar ? (ordenAEditar.tiene_descuento || false) : false);
   const [categoriaActual, setCategoriaActual] = useState(null);
   
   const [cajaAbierta, setCajaAbierta] = useState(false); 
@@ -73,11 +151,19 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
   const [editandoObservacionId, setEditandoObservacionId] = useState(null);
   const [observacionTemp, setObservacionTemp] = useState('');
   const [notificacion, setNotificacion] = useState(null);
+  
+  const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
+
+  const [debugInfo, setDebugInfo] = useState({ logs: [], ruta: '', modo: 'Iniciando...' });
+  
+  const [activeAppId, setActiveAppId] = useState(APP_IDS_A_ESCANEAR[0]);
+  const [usarColeccionRaiz, setUsarColeccionRaiz] = useState(false); 
 
   const proximoNumeroSeguro = useRef(null);
-
+  
   const emailUsuario = user ? user.email : "";
   const esPrueba = emailUsuario === "prueba@isakari.com";
+  
   const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
   const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
 
@@ -86,7 +172,6 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
     setTimeout(() => setNotificacion(null), 3000);
   };
 
-  // --- AUTH (RULE 3) ---
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -102,49 +187,121 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
     return () => unsubscribe();
   }, []);
 
-  // --- LISTENERS (RULE 1 & 2) ---
   useEffect(() => {
     if (!user) return;
 
-    const qMenu = collection(db, 'artifacts', appId, 'public', 'data', 'menu');
-    const unsubscribeMenu = onSnapshot(qMenu, (snapshot) => {
-      const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      docs.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
-      setMenu(docs);
+    let menuRaiz = [];
+    let menuArtifact = [];
+
+    const actualizarMenu = () => {
+        if (menuRaiz.length > 0) {
+            setMenu(menuRaiz);
+        } else if (menuArtifact.length > 0) {
+            setMenu(menuArtifact);
+        } else {
+            setMenu([]);
+        }
+    };
+
+    const unsubMenuRaiz = onSnapshot(collection(db, "menu"), (snapshot) => {
+        menuRaiz = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        menuRaiz.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        actualizarMenu();
     });
 
-    const qCajas = collection(db, 'artifacts', appId, 'public', 'data', COL_CAJAS);
-    const unsubscribeCaja = onSnapshot(qCajas, (snapshot) => {
-      const abierta = snapshot.docs.map(d => d.data()).find(c => c.estado === "abierta");
-      if (abierta) {
-        setCajaAbierta(true);
-        if (!ordenAEditar) calcularNumeroVisual(abierta.fecha_apertura);
-      } else {
-        setCajaAbierta(false);
-      }
-      setCargando(false);
+    const unsubMenuArtifact = onSnapshot(collection(db, 'artifacts', activeAppId, 'public', 'data', 'menu'), (snapshot) => {
+        menuArtifact = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        menuArtifact.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        actualizarMenu();
     });
 
-    return () => { unsubscribeMenu(); unsubscribeCaja(); };
-  }, [user, appId, COL_CAJAS, ordenAEditar]);
 
-  const calcularNumeroVisual = async (fechaInicioCaja) => {
+    const unsubscribes = [];
+    let cajaEncontradaEnAlgunSitio = false;
+
+    try {
+        const qRaiz = query(collection(db, COL_CAJAS), where("estado", "==", "abierta"));
+        const unsubRaiz = onSnapshot(qRaiz, (snapshot) => {
+            if (!snapshot.empty) {
+                const cajaData = snapshot.docs[0].data();
+                cajaEncontradaEnAlgunSitio = true;
+                setCajaAbierta(true);
+                setUsarColeccionRaiz(true); 
+                const fechaRef = cajaData.fecha_apertura || cajaData.fecha || Timestamp.now();
+                if (!ordenAEditar) calcularNumeroVisual(fechaRef, true, null);
+                setDebugInfo(prev => ({...prev, ruta: `/${COL_CAJAS}`, modo: esPrueba ? 'PRUEBAS' : 'PROD'}));
+            } else {
+                if (!cajaEncontradaEnAlgunSitio) setCajaAbierta(false);
+            }
+            setCargando(false);
+        });
+        unsubscribes.push(unsubRaiz);
+    } catch (e) {
+        console.warn("Error escuchando raíz:", e);
+    }
+
+    APP_IDS_A_ESCANEAR.forEach(idToScan => {
+        const qCajaArtifact = collection(db, 'artifacts', idToScan, 'public', 'data', COL_CAJAS);
+        const unsubArtifact = onSnapshot(qCajaArtifact, (snapshot) => {
+            if (cajaEncontradaEnAlgunSitio && usarColeccionRaiz) return;
+            const registros = snapshot.docs.map(d => d.data());
+            const cajaActiva = registros.find(c => c.estado && c.estado.toString().toLowerCase() === "abierta");
+            if (cajaActiva) {
+                cajaEncontradaEnAlgunSitio = true;
+                setCajaAbierta(true);
+                setUsarColeccionRaiz(false); 
+                setActiveAppId(idToScan);
+                const fechaRef = cajaActiva.fecha_apertura || cajaActiva.fecha || Timestamp.now();
+                if (!ordenAEditar) calcularNumeroVisual(fechaRef, false, idToScan);
+                setDebugInfo(prev => ({...prev, ruta: `artifacts/${idToScan}/...`}));
+            } else {
+                if (!cajaEncontradaEnAlgunSitio) setCajaAbierta(false);
+            }
+            setCargando(false);
+        });
+        unsubscribes.push(unsubArtifact);
+    });
+
+    return () => { 
+        unsubMenuRaiz();
+        unsubMenuArtifact();
+        unsubscribes.forEach(u => u()); 
+    };
+  }, [user, ordenAEditar, COL_CAJAS]); 
+
+  const calcularNumeroVisual = async (fechaInicioCaja, esRaiz, appIdArtifact) => {
     if (proximoNumeroSeguro.current !== null) { setNumeroPedidoVisual(proximoNumeroSeguro.current); return; }
     try {
-        const qOrdenes = collection(db, 'artifacts', appId, 'public', 'data', COL_ORDENES);
+        let qOrdenes;
+        if (esRaiz) {
+            try {
+                qOrdenes = query(
+                    collection(db, COL_ORDENES), 
+                    where("fecha", ">=", fechaInicioCaja),
+                    orderBy("numero_pedido", "desc"), 
+                    limit(1)
+                );
+            } catch (e) {
+                qOrdenes = collection(db, COL_ORDENES);
+            }
+        } else {
+            qOrdenes = collection(db, 'artifacts', appIdArtifact, 'public', 'data', COL_ORDENES);
+        }
         const snapshot = await getDocs(qOrdenes);
-        const filtradas = snapshot.docs.map(d => d.data()).filter(o => o.fecha && o.fecha.toMillis() >= (fechaInicioCaja?.toMillis ? fechaInicioCaja.toMillis() : 0));
+        const filtradas = snapshot.docs.map(d => d.data()).filter(o => {
+            const ordenMillis = o.fecha?.toMillis ? o.fecha.toMillis() : 0;
+            return ordenMillis >= (fechaInicioCaja?.toMillis ? fechaInicioCaja.toMillis() : 0);
+        });
         const max = filtradas.reduce((m, o) => Math.max(m, o.numero_pedido || 0), 0);
         setNumeroPedidoVisual(max + 1);
-    } catch (e) { setNumeroPedidoVisual(1); }
+    } catch (e) { 
+        setNumeroPedidoVisual(1); 
+    }
   };
 
   const numCostoDespacho = parseInt(costoDespacho) || 0;
-  const subTotalProductos = orden.reduce((acc, item) => acc + (item.precio * item.cantidad), 0);
-  const montoDescuento = aplicarDescuento ? Math.round(subTotalProductos * 0.10) : 0;
-  const totalFinal = (subTotalProductos - montoDescuento) + numCostoDespacho;
+  const totalFinal = orden.reduce((acc, item) => acc + (item.precio * item.cantidad), 0) + numCostoDespacho;
   const formatoPeso = (v) => v.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
-
   const categoriasUnicas = [...new Set(menu.map(item => item.categoria))];
   const productosFiltrados = categoriaActual ? menu.filter(item => item.categoria === categoriaActual) : [];
 
@@ -168,10 +325,14 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
     setEditandoObservacionId(null);
   };
 
+  const abrirVistaPrevia = () => {
+      if (orden.length === 0) return notificar("⚠️ Orden vacía", "error");
+      setMostrarVistaPrevia(true);
+  };
+
   const handlePrint = () => {
     const datos = { numeroPedido: numeroPedidoVisual, cliente: nombreCliente, items: orden, total: totalFinal };
     if (ipcRenderer && ipcRenderer.send) ipcRenderer.send('imprimir-ticket-raw', datos);
-    else console.log("Print Sim:", datos);
   };
 
   const enviarCocina = async (imprimir = false) => {
@@ -183,8 +344,6 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
         const datos = {
             items: orden,
             total: totalFinal,
-            tiene_descuento: aplicarDescuento,
-            monto_descuento: montoDescuento,
             costo_despacho: numCostoDespacho,
             tipo_entrega: tipoEntrega,
             descripcion: descripcionGeneral,
@@ -195,36 +354,40 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
             fechaString: getLocalDate(),
             numero_pedido: ordenAEditar ? ordenAEditar.numero_pedido : (proximoNumeroSeguro.current || numeroPedidoVisual),
             estado: "pendiente",
-            estadoPago: "Pendiente",
+            estado_pago: "Pendiente",
             fecha: Timestamp.now(),
             usuario_id: user?.uid || "anonimo"
         };
 
+        const rutaColeccion = usarColeccionRaiz 
+            ? collection(db, COL_ORDENES) 
+            : collection(db, 'artifacts', activeAppId, 'public', 'data', COL_ORDENES);
+
         if (ordenAEditar) {
-            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', COL_ORDENES, ordenAEditar.id), datos);
+            await updateDoc(doc(rutaColeccion, ordenAEditar.id), datos);
             notificar("Pedido actualizado", "success");
             if (onTerminarEdicion) onTerminarEdicion();
         } else {
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', COL_ORDENES), datos);
+            await addDoc(rutaColeccion, datos);
             const sig = datos.numero_pedido + 1;
             proximoNumeroSeguro.current = sig;
             notificar(`¡Pedido #${datos.numero_pedido} creado!`, "success");
             limpiarFormulario(sig);
         }
         if (imprimir) handlePrint();
-    } catch (e) { notificar("Error: " + e.message, "error"); }
-    finally { setCargando(false); }
+    } catch (e) { 
+        notificar("Error: " + e.message, "error"); 
+    } finally { setCargando(false); }
   };
 
   const limpiarFormulario = (sig) => {
     setOrden([]); setEditandoObservacionId(null); setDescripcionGeneral(''); setNombreCliente('');
     setCostoDespacho(''); setDireccion(''); setTelefono(''); setTipoEntrega('LOCAL');
-    setAplicarDescuento(false); setCategoriaActual(null);
     if (sig) setNumeroPedidoVisual(sig);
   };
 
   if (cargando && !orden.length && !ordenAEditar) 
-    return <div className="h-screen w-full flex items-center justify-center bg-slate-100 text-slate-500 font-bold text-xl animate-pulse">Cargando Isakari...</div>;
+    return <div className="h-screen w-full flex items-center justify-center bg-slate-100 text-slate-500 font-bold text-xl animate-pulse">Cargando...</div>;
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-gray-800 overflow-hidden relative">
@@ -234,9 +397,12 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
         </div>
       )}
 
-      {/* SIDEBAR IZQUIERDA */}
       <aside className="w-[400px] bg-white shadow-xl flex flex-col z-20 h-full border-r border-gray-200">
-        <div className="p-4 border-b border-gray-100">
+        <div className="p-4 border-b border-gray-100 bg-gray-50">
+           <div className={`mb-3 text-[10px] font-black uppercase tracking-widest text-center py-1 rounded border ${esPrueba ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-green-100 text-green-700 border-green-200'}`}>
+               {esPrueba ? "🛠️ MODO PRUEBAS" : "🟢 MODO PRODUCCIÓN"}
+           </div>
+
            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center text-white shadow-lg"><i className="bi bi-basket2-fill"></i></div>
@@ -245,21 +411,25 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
                     <span className="text-xs text-gray-400 font-bold">ORDEN #{numeroPedidoVisual}</span>
                   </div>
               </div>
-              <button onClick={() => setAplicarDescuento(!aplicarDescuento)} className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all border ${aplicarDescuento ? 'bg-red-600 text-white border-red-700' : 'bg-slate-50 text-gray-400 border-gray-200'}`}>10% OFF</button>
            </div>
+           
            <div className="space-y-2">
-              <input type="text" placeholder="Nombre Cliente *" className="w-full p-2.5 rounded-xl border border-gray-100 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-bold" value={nombreCliente} onChange={e => setNombreCliente(e.target.value)} />
+              <input type="text" placeholder="Nombre Cliente *" className="w-full p-2.5 rounded-xl border border-gray-100 bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-bold" value={nombreCliente} onChange={e => setNombreCliente(e.target.value)} />
               <div className="flex bg-slate-100 rounded-xl p-1">
                 <button className={`flex-1 py-2 rounded-lg text-xs font-black transition-all ${tipoEntrega === 'LOCAL' ? 'bg-white shadow-sm text-red-600' : 'text-gray-400'}`} onClick={() => { setTipoEntrega('LOCAL'); setCostoDespacho(''); }}>LOCAL</button>
                 <button className={`flex-1 py-2 rounded-lg text-xs font-black transition-all ${tipoEntrega === 'REPARTO' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`} onClick={() => setTipoEntrega('REPARTO')}>REPARTO</button>
               </div>
+              
               {tipoEntrega === 'REPARTO' && (
-                <div className="pt-2 space-y-2 animate-fade-in">
-                  <input type="text" placeholder="Dirección..." className="w-full p-2.5 bg-orange-50 border-orange-100 rounded-xl text-sm outline-none" value={direccion} onChange={e => setDireccion(e.target.value)} />
-                  <div className="flex gap-2">
-                    <input type="text" placeholder="Teléfono..." className="flex-1 p-2.5 bg-orange-50 border-orange-100 rounded-xl text-sm outline-none" value={telefono} onChange={e => setTelefono(e.target.value)} />
-                    <input type="number" placeholder="$" className="w-20 p-2.5 bg-orange-50 border-orange-100 rounded-xl text-sm font-bold text-right outline-none" value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
+                <div className="pt-2 animate-fade-in bg-orange-50 rounded-xl p-2 border border-orange-100 shadow-inner">
+                  <div className="d-flex gap-2 mb-2">
+                     <input type="text" placeholder="Dirección..." className="flex-[2] p-2 bg-white border border-orange-200 rounded-lg text-xs outline-none focus:ring-1 focus:ring-orange-300" value={direccion} onChange={e => setDireccion(e.target.value)} />
+                     <div className="relative flex-1">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-orange-400 font-bold text-xs">$</span>
+                        <input type="number" placeholder="Envío" className="w-full p-2 pl-4 bg-white border border-orange-200 rounded-lg text-xs font-bold text-right outline-none focus:ring-1 focus:ring-orange-300" value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
+                     </div>
                   </div>
+                  <input type="text" placeholder="Teléfono..." className="w-full p-2 bg-white border border-orange-200 rounded-lg text-xs outline-none focus:ring-1 focus:ring-orange-300" value={telefono} onChange={e => setTelefono(e.target.value)} />
                 </div>
               )}
            </div>
@@ -267,9 +437,8 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {orden.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-gray-300">
-                    <i className="bi bi-cart-x text-6xl mb-2"></i>
-                    <p className="font-bold italic">Vaciando el mar...</p>
+                <div className="h-full flex flex-col items-center justify-center text-gray-300 text-center">
+                    <p className="font-bold italic">Seleccione categorías para agregar productos</p>
                 </div>
             ) : (
                 orden.map((item) => (
@@ -277,7 +446,7 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
                         <div className="flex justify-between items-start">
                             <div className="flex-1">
                                 <h4 className="font-black text-gray-800 text-sm uppercase leading-tight">{item.nombre}</h4>
-                                {item.descripcion && <p className="text-[11px] text-gray-500 italic line-clamp-2 mt-1 leading-tight">{item.descripcion}</p>}
+                                <span className="font-black text-gray-400 text-xs">{formatoPeso(item.precio)} c/u</span>
                             </div>
                             <span className="font-black text-gray-800 text-sm ml-2">{formatoPeso(item.precio * item.cantidad)}</span>
                         </div>
@@ -305,19 +474,25 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
 
         <div className="p-4 bg-white border-t border-gray-100">
             <div className="flex justify-between items-end mb-4">
-                <div className="flex flex-col"><span className="text-gray-400 font-bold text-xs uppercase tracking-widest">Total</span>{aplicarDescuento && <span className="text-red-500 font-bold text-[10px]">- {formatoPeso(montoDescuento)}</span>}</div>
+                <div className="flex flex-col"><span className="text-gray-400 font-bold text-xs uppercase tracking-widest">Total</span></div>
                 <span className="text-3xl font-black text-gray-900 tracking-tighter">{formatoPeso(totalFinal)}</span>
             </div>
-            <button onClick={() => enviarCocina(true)} disabled={(!cajaAbierta && !ordenAEditar) || orden.length === 0} className="w-full py-4 rounded-2xl font-black text-white text-lg bg-red-600 shadow-xl shadow-red-100 hover:bg-red-700 disabled:opacity-30 transition-all flex items-center justify-center gap-2"><i className="bi bi-printer-fill"></i> {ordenAEditar ? 'GUARDAR CAMBIOS' : 'CONFIRMAR'}</button>
-            {ordenAEditar && <button onClick={onTerminarEdicion} className="w-full mt-2 py-2 text-gray-400 font-bold text-sm uppercase tracking-widest">Cancelar Edición</button>}
+            
+            <div className="d-flex gap-2">
+                <button className="p-3 rounded-2xl bg-slate-200 text-slate-600 hover:bg-slate-300 transition-colors shadow-sm" onClick={abrirVistaPrevia} disabled={!cajaAbierta && !ordenAEditar} title="Vista Previa Ticket"><i className="bi bi-eye-fill text-xl"></i></button>
+                <button onClick={() => enviarCocina(true)} disabled={(!cajaAbierta && !ordenAEditar) || orden.length === 0} className="flex-1 py-4 rounded-2xl font-black text-white text-lg bg-red-600 shadow-xl shadow-red-100 hover:bg-red-700 disabled:opacity-30 transition-all flex items-center justify-center gap-2"><i className="bi bi-printer-fill"></i> {ordenAEditar ? 'GUARDAR' : 'CONFIRMAR'}</button>
+            </div>
         </div>
       </aside>
 
-      {/* AREA PRINCIPAL */}
-      <main className="flex-1 flex flex-col h-full bg-slate-50">
+      <main className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden">
          <div className="p-6">
              {!cajaAbierta && !ordenAEditar ? (
-                <div className="bg-red-600 text-white p-4 rounded-2xl text-center font-black shadow-lg animate-pulse uppercase tracking-widest"><i className="bi bi-lock-fill mr-2"></i> Caja Cerrada</div>
+                <div className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-xl border border-red-100">
+                    <div className="bg-red-100 text-red-600 p-6 rounded-full mb-4 animate-pulse"><i className="bi bi-lock-fill text-4xl"></i></div>
+                    <h2 className="text-3xl font-black text-gray-800 uppercase tracking-tight mb-2">Caja Cerrada</h2>
+                    <p className="text-gray-400 font-medium mb-6 text-center max-w-md">No puedes tomar pedidos hasta que abras la caja.</p>
+                </div>
              ) : (
                 <div className="flex items-center gap-4">
                     {categoriaActual && <button onClick={() => setCategoriaActual(null)} className="p-3 bg-white rounded-2xl shadow-sm border border-gray-100 hover:bg-gray-50"><i className="bi bi-arrow-left text-xl text-red-600"></i></button>}
@@ -325,11 +500,12 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
                 </div>
              )}
          </div>
+
          <div className="flex-1 overflow-y-auto px-6 pb-20">
-             {!categoriaActual ? (
+             {(!cajaAbierta && !ordenAEditar) ? null : (!categoriaActual ? (
                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
                     {categoriasUnicas.map(cat => (
-                        <button key={cat} onClick={() => setCategoriaActual(cat)} className="bg-white rounded-[2.5rem] p-8 shadow-sm hover:shadow-2xl hover:-translate-y-1 border border-gray-100 transition-all flex flex-col items-center justify-center text-center group h-52 active:scale-95">
+                        <button key={cat} onClick={() => setCategoriaActual(cat)} className="bg-white rounded-[2.5rem] p-8 shadow-sm hover:shadow-2xl hover:-translate-y-1 border border-gray-100 transition-all flex flex-col items-center justify-center text-center group h-52">
                            <div className="w-18 h-18 rounded-full bg-slate-50 mb-4 flex items-center justify-center group-hover:bg-red-50 transition-colors shadow-inner"><span className="text-3xl">📂</span></div>
                            <h3 className="font-black text-gray-800 text-xl uppercase group-hover:text-red-600 tracking-tight">{cat}</h3>
                            <span className="text-[10px] text-gray-300 font-bold mt-2 uppercase tracking-widest">{menu.filter(i => i.categoria === cat).length} productos</span>
@@ -339,7 +515,7 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
              ) : (
                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
                     {productosFiltrados.map(item => (
-                        <button key={item.id} onClick={() => agregarAlPedido(item)} className="bg-white rounded-[2.5rem] p-5 shadow-sm hover:shadow-2xl hover:-translate-y-1 border border-gray-100 transition-all flex flex-col items-center text-center group min-h-[260px] justify-between active:scale-95">
+                        <button key={item.id} onClick={() => agregarAlPedido(item)} className="bg-white rounded-[2.5rem] p-5 shadow-sm hover:shadow-2xl hover:-translate-y-1 border border-gray-100 transition-all flex flex-col items-center text-center group min-h-[260px] justify-between">
                             <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner"><span className="text-3xl">🍣</span></div>
                             <div className="flex-1 flex flex-col justify-center py-4 w-full">
                                 <h3 className="font-black text-gray-800 text-sm uppercase line-clamp-2 leading-tight group-hover:text-red-600">{item.nombre}</h3>
@@ -349,12 +525,40 @@ export function TomarPedido({ ordenAEditar, onTerminarEdicion }) {
                         </button>
                     ))}
                  </div>
-             )}
+             ))}
          </div>
       </main>
+
+      {mostrarVistaPrevia && (
+        <div className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4">
+            <div className="bg-white rounded-lg shadow-2xl overflow-hidden max-w-sm w-full max-h-[90vh] flex flex-col">
+                <div className="bg-slate-800 text-white p-3 flex justify-between items-center">
+                    <h6 className="font-bold m-0 text-sm uppercase tracking-wider">Vista Previa Ticket</h6>
+                    <button onClick={() => setMostrarVistaPrevia(false)} className="text-white/70 hover:text-white"><i className="bi bi-x-lg"></i></button>
+                </div>
+                <div className="p-4 overflow-y-auto bg-slate-100 flex justify-center">
+                    <Ticket 
+                        orden={orden} 
+                        total={totalFinal} 
+                        numeroPedido={numeroPedidoVisual} 
+                        tipoEntrega={tipoEntrega} 
+                        fecha={new Date().toLocaleDateString('es-CL')} 
+                        descripcion={descripcionGeneral} 
+                        cliente={nombreCliente} 
+                        hora={horaPedido} 
+                        costoDespacho={numCostoDespacho} 
+                        direccion={direccion} 
+                        telefono={telefono} 
+                    />
+                </div>
+                <div className="p-3 border-t bg-white">
+                    <button className="w-full py-2 bg-slate-200 text-slate-700 font-bold rounded-lg hover:bg-slate-300 transition-colors" onClick={() => setMostrarVistaPrevia(false)}>Cerrar</button>
+                </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 }
-
 
 export default TomarPedido;

@@ -109,7 +109,25 @@ export const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, descrip
       {tipoEntrega === 'REPARTO' && (direccion || telefono) && (
         <div className="datos-reparto mt-3 text-start">
           <h5 className="fw-bold text-center mb-2 text-uppercase bg-light border p-1">DATOS DE DESPACHO</h5>
-          {direccion && <div className="mb-1"><span className="fw-bold">Dirección:</span><br/><span style={{fontSize:'1.1em'}}>{direccion}</span></div>}
+          
+          {/* CORRECCIÓN AQUÍ: Estilos para evitar corte de palabras */}
+          {direccion && (
+            <div className="mb-1">
+                <span className="fw-bold">Dirección:</span>
+                <br/>
+                <span style={{
+                    fontSize:'1.2em', // Un poco más grande para legibilidad
+                    display: 'block',
+                    wordWrap: 'break-word', // Romper solo si es necesario
+                    wordBreak: 'normal',    // NO romper palabras a la mitad
+                    overflowWrap: 'break-word',
+                    lineHeight: '1.2'
+                }}>
+                    {direccion}
+                </span>
+            </div>
+          )}
+          
           {telefono && <div className="mb-1"><span className="fw-bold">Teléfono:</span> {telefono}</div>}
         </div>
       )}
