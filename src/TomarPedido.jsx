@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, addDoc, updateDoc, doc, Timestamp, query, where, onSnapshot } from 'firebase/firestore';
+// Corregimos las rutas de importación eliminando las extensiones para el compilador
 import { db } from './firebase'; 
 import { useUi } from './context/UiContext';
 import Ticket from './Ticket';
 
-// Detectar Electron de forma segura
+// Detectar Electron de forma segura para impresión directa en térmicas (Modo POS)
 const ipcRenderer = (function() {
   try {
     if (typeof window !== 'undefined' && window.require) {
@@ -17,6 +18,8 @@ const ipcRenderer = (function() {
 
 export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
   const { notificar } = useUi();
+  
+  // --- ESTADOS DE DATOS ---
   const [menu, setMenu] = useState([]);
   const [orden, setOrden] = useState([]);
   const [numeroPedidoVisual, setNumeroPedidoVisual] = useState('...'); 
@@ -27,12 +30,15 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
   const [costoDespacho, setCostoDespacho] = useState('');
   const [descripcionGeneral, setDescripcionGeneral] = useState('');
   const [horaPedido, setHoraPedido] = useState(new Date().toLocaleTimeString('es-CL', {hour: '2-digit', minute:'2-digit'}));
+  
+  // --- ESTADOS DE UI ---
   const [categoriaActual, setCategoriaActual] = useState(null);
   const [cajaAbierta, setCajaAbierta] = useState(false); 
   const [cargando, setCargando] = useState(true); 
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
-  
-  // Edición de notas
+  const [ultimoPedidoParaImprimir, setUltimoPedidoParaImprimir] = useState(null); 
+
+  // Edición de notas por producto
   const [editandoNotaIndex, setEditandoNotaIndex] = useState(null);
   const [textoNotaTemp, setTextoNotaTemp] = useState('');
   const inputNotaRef = useRef(null);
@@ -40,7 +46,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
   const COL_CAJAS = user?.email === "prueba@isakari.com" ? "cajas_pruebas" : "cajas";
   const COL_ORDENES = user?.email === "prueba@isakari.com" ? "ordenes_pruebas" : "ordenes";
 
-  // Cargar datos de edición si existen
+  // Cargar datos en modo edición
   useEffect(() => {
     if (ordenAEditar) {
       setOrden(ordenAEditar.items || []);
@@ -55,7 +61,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
     }
   }, [ordenAEditar]);
 
-  // Suscripciones a Firebase (Menú y Estado de Caja)
+  // Suscripción al Menú y Estado de Caja
   useEffect(() => {
     if (!user) return;
     const unsubMenu = onSnapshot(collection(db, "menu"), (snap) => {
@@ -63,64 +69,57 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
     }, err => console.error(err));
 
     const unsubCaja = onSnapshot(query(collection(db, COL_CAJAS), where("estado", "==", "abierta")), (snap) => {
-        if (!snap.empty) {
-            setCajaAbierta(true);
-            // Solo calcular número de pedido si es una orden nueva
-            if (!ordenAEditar) {
-                const hoy = new Date().toISOString().split('T')[0];
-                getDocs(collection(db, COL_ORDENES)).then(oSnap => {
-                    const max = oSnap.docs.map(doc => doc.data()).filter(o => o.fechaString === hoy).reduce((m, o) => Math.max(m, Number(o.numero_pedido) || 0), 0);
-                    setNumeroPedidoVisual(max + 1);
-                }).catch(err => console.warn(err));
-            }
-        } else {
-            setCajaAbierta(false);
+        setCajaAbierta(!snap.empty);
+        if (!snap.empty && !ordenAEditar) {
+            const hoy = new Date().toISOString().split('T')[0];
+            getDocs(collection(db, COL_ORDENES)).then(oSnap => {
+                const max = oSnap.docs.map(doc => doc.data()).filter(o => o.fechaString === hoy).reduce((m, o) => Math.max(m, Number(o.numero_pedido) || 0), 0);
+                setNumeroPedidoVisual(max + 1);
+            });
         }
         setCargando(false);
-    }, err => { console.error(err); setCargando(false); });
+    });
 
     return () => { unsubMenu(); unsubCaja(); };
   }, [user, COL_CAJAS, ordenAEditar]);
 
-  // Auto-focus al editar nota
+  // Foco automático en el input de nota
   useEffect(() => {
     if (editandoNotaIndex !== null && inputNotaRef.current) inputNotaRef.current.focus();
   }, [editandoNotaIndex]);
 
   const totalFinal = orden.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) + (parseInt(costoDespacho) || 0);
 
+  const resetearFormulario = () => {
+    setOrden([]); 
+    setNombreCliente(''); 
+    setDireccion(''); 
+    setTelefono(''); 
+    setCostoDespacho(''); 
+    setDescripcionGeneral('');
+    setCategoriaActual(null);
+  };
+
   const enviarCocina = async () => {
-    if (orden.length === 0) return notificar("⚠️ Orden vacía", "error");
-    if (!cajaAbierta && !ordenAEditar) {
-        if(!window.confirm("Caja cerrada. ¿Enviar igual?")) return;
+    if (orden.length === 0) {
+      notificar("⚠️ Orden vacía", "error");
+      return;
     }
     
-    setCargando(true);
     try {
-        let numFinal = numeroPedidoVisual;
         const hoy = new Date().toISOString().split('T')[0];
-        
-        // Si es orden nueva, asegurar correlativo
-        if (!ordenAEditar) {
-            try {
-                const snap = await getDocs(collection(db, COL_ORDENES));
-                const max = snap.docs.map(d => d.data()).filter(o => o.fechaString === hoy).reduce((m, o) => Math.max(m, Number(o.numero_pedido) || 0), 0);
-                numFinal = max + 1;
-            } catch(e) { numFinal = Math.floor(Math.random()*1000); }
-        }
-
         const datos = {
-            items: [...orden], 
+            items: JSON.parse(JSON.stringify(orden)), 
             total: totalFinal,
             costo_despacho: parseInt(costoDespacho) || 0, 
             tipo_entrega: tipoEntrega, 
-            nombre_cliente: String(nombreCliente),
+            nombre_cliente: String(nombreCliente).toUpperCase(),
             hora_pedido: String(horaPedido), 
             direccion: String(direccion), 
             telefono: String(telefono),
-            descripcion: String(descripcionGeneral), 
+            descripcion: String(descripcionGeneral).toUpperCase(), 
             fechaString: hoy,
-            numero_pedido: ordenAEditar ? ordenAEditar.numero_pedido : numFinal,
+            numero_pedido: ordenAEditar ? ordenAEditar.numero_pedido : numeroPedidoVisual,
             estado: ordenAEditar ? ordenAEditar.estado : "pendiente", 
             estado_pago: ordenAEditar ? ordenAEditar.estado_pago : "Pendiente",
             fecha: ordenAEditar ? ordenAEditar.fecha : Timestamp.now(), 
@@ -128,19 +127,43 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
         };
 
         if (ordenAEditar) {
-            await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
-            if (ipcRenderer) ipcRenderer.send('imprimir-ticket-raw', JSON.parse(JSON.stringify(datos)));
-            notificar("¡Pedido actualizado!", "success");
-            setTimeout(() => onTerminarEdicion(), 1000);
+            // MODO EDICIÓN: Optimista Offline
+            updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos).catch(err => console.error(err));
+            notificar("¡Pedido Actualizado!", "success");
+            resetearFormulario();
+            if (onTerminarEdicion) onTerminarEdicion();
         } else {
-            await addDoc(collection(db, COL_ORDENES), datos);
-            if (ipcRenderer) ipcRenderer.send('imprimir-ticket-raw', JSON.parse(JSON.stringify(datos)));
-            notificar("¡Pedido enviado!", "success");
-            // Resetear formulario
-            setOrden([]); setNombreCliente(''); setDireccion(''); setTelefono(''); setCostoDespacho(''); setDescripcionGeneral('');
-            setNumeroPedidoVisual(numFinal + 1);
+            // MODO CREACIÓN: Optimista Offline
+            addDoc(collection(db, COL_ORDENES), datos).catch(err => console.error(err));
+            notificar("¡Orden Confirmada!", "success");
+            
+            // Notificación de Impresión Automática
+            notificar(`Imprimiendo ticket orden #${datos.numero_pedido}...`, "success");
+            
+            setUltimoPedidoParaImprimir(datos);
+            resetearFormulario();
+
+            if (ipcRenderer) {
+                ipcRenderer.send('imprimir-ticket-raw', {
+                    numeroPedido: datos.numero_pedido,
+                    cliente: datos.nombre_cliente,
+                    items: datos.items,
+                    total: datos.total,
+                    tipoEntrega: datos.tipo_entrega,
+                    direccion: datos.direccion,
+                    telefono: datos.telefono,
+                    descripcion: datos.descripcion
+                });
+            } else {
+                setTimeout(() => { 
+                    window.print(); 
+                    setUltimoPedidoParaImprimir(null);
+                }, 1200);
+            }
         }
-    } catch (e) { notificar("Error al guardar", "error"); } finally { setCargando(false); }
+    } catch (e) { 
+        notificar("Error al procesar el pedido", "error"); 
+    }
   };
 
   const agregarAlPedido = (p) => {
@@ -153,7 +176,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
     setOrden(orden.map(item => item.id === id ? { ...item, cantidad: Math.max(0, item.cantidad + delta) } : item).filter(item => item.cantidad > 0));
   };
 
-  const guardarNota = (index) => {
+  const guardarNotaItem = (index) => {
     setOrden(prev => {
         const nueva = [...prev];
         nueva[index] = { ...nueva[index], observacion: textoNotaTemp.toUpperCase() };
@@ -162,11 +185,12 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
     setEditandoNotaIndex(null);
   };
 
-  if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-400">Cargando...</div>;
+  if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-400 animate-pulse">Cargando Pedido...</div>;
 
   return (
     <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative">
-      {/* SIDEBAR - CARRITO COMPACTO */}
+      
+      {/* SECCIÓN IZQUIERDA: CARRITO */}
       <aside className="w-[400px] h-full bg-white shadow-xl flex flex-col z-20 border-r border-gray-200 flex-shrink-0">
         <div className="p-3 border-b border-gray-100 bg-gray-50 flex-shrink-0 space-y-2">
            <div className="flex items-center justify-between">
@@ -176,7 +200,9 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
               </div>
               <div className="flex gap-2">
                   <button onClick={() => setMostrarVistaPrevia(true)} className="p-2 bg-white border border-gray-200 rounded-2xl text-gray-400 hover:text-red-600 transition-colors shadow-sm"><i className="bi bi-eye-fill"></i></button>
-                  <button onClick={enviarCocina} className="bg-red-600 text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-red-700 active:scale-95 transition-all">CONFIRMAR</button>
+                  <button onClick={enviarCocina} className="bg-red-600 text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-red-700 active:scale-95 transition-all">
+                      {ordenAEditar ? 'ACTUALIZAR' : 'CONFIRMAR'}
+                  </button>
               </div>
            </div>
            
@@ -188,7 +214,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
            </div>
            
            {tipoEntrega === 'REPARTO' && (
-             <div className="space-y-2 bg-orange-50 p-2 rounded-2xl border border-orange-100 animate-fade-in">
+             <div className="space-y-2 bg-orange-50 p-2 rounded-2xl border border-orange-100">
                <input type="text" placeholder="Dirección..." className="w-full p-2 bg-white border border-orange-200 rounded-lg text-[10px] font-bold outline-none" value={direccion} onChange={e => setDireccion(e.target.value)} />
                <div className="flex gap-2">
                  <input type="text" placeholder="Teléfono" className="flex-1 p-2 bg-white border border-orange-200 rounded-lg text-[10px] font-bold outline-none" value={telefono} onChange={e => setTelefono(e.target.value)} />
@@ -197,13 +223,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
              </div>
            )}
            
-           {/* TOTAL COMPACTO */}
            <div className="px-3 py-2 bg-slate-900 text-white rounded-xl flex justify-between items-center shadow-lg border border-slate-800">
               <span className="text-[9px] font-black uppercase opacity-60 tracking-widest">Total</span>
               <span className="text-xl font-black tracking-tighter leading-none">${totalFinal.toLocaleString('es-CL')}</span>
            </div>
            
-           {/* NOTAS GENERALES COMPACTAS */}
            <textarea 
              placeholder="NOTAS GENERALES..." 
              className="w-full p-2 border border-gray-200 rounded-xl text-[9px] uppercase font-bold focus:border-blue-600 outline-none resize-none h-10 bg-white shadow-inner" 
@@ -212,68 +236,71 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
            />
         </div>
 
-        {/* LISTA DE PRODUCTOS - Estilo Compacto */}
         <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50 custom-scrollbar">
           {orden.map((item, idx) => (
-            <div key={idx} className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex justify-between font-black text-xs uppercase text-slate-800">
-                <span className="flex-1 mr-2 leading-tight">{String(item.nombre)}</span>
-                <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded-lg h-fit text-[10px]">{item.cantidad}x</span>
-              </div>
-              
-              <div className="mt-2 pt-2 border-t border-slate-50">
-                {editandoNotaIndex === idx ? (
-                    <div className="flex gap-1 animate-fade-in">
-                        <input ref={inputNotaRef} type="text" className="flex-1 p-1.5 border-2 border-blue-200 rounded-lg text-[10px] font-bold uppercase outline-none focus:border-blue-500" placeholder="Escribe nota..." value={textoNotaTemp} onChange={(e) => setTextoNotaTemp(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') guardarNota(idx); if (e.key === 'Escape') setEditandoNotaIndex(null); }} />
-                        <button onClick={() => guardarNota(idx)} className="bg-blue-600 text-white px-2 rounded-lg text-[10px]"><i className="bi bi-check-lg"></i></button>
-                    </div>
-                ) : (
-                    <div className="flex justify-between items-center">
-                        <button onClick={() => { setTextoNotaTemp(item.observacion || ''); setEditandoNotaIndex(idx); }} className="text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-2 py-1 rounded-lg hover:bg-blue-100 transition-colors"><i className="bi bi-pencil-square"></i> {item.observacion ? 'Editar' : 'Nota'}</button>
-                        <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200 shadow-inner">
-                        <button className="px-2 py-0.5 text-gray-500 hover:text-red-600 font-black text-xs" onClick={() => ajustarCantidad(item.id, -1)}>-</button>
-                        <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded shadow-sm">{item.cantidad}</span>
-                        <button className="px-2 py-0.5 text-gray-500 hover:text-green-600 font-black text-xs" onClick={() => ajustarCantidad(item.id, 1)}>+</button>
+            <div key={idx} className="bg-white p-2.5 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
+                <div className="flex justify-between font-black text-xs uppercase text-slate-800">
+                    <span className="flex-1 mr-2 leading-tight">{item.nombre}</span>
+                    <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded-lg h-fit text-[10px]">{item.cantidad}x</span>
+                </div>
+                
+                <div className="mt-2 flex justify-between items-center">
+                    {editandoNotaIndex === idx ? (
+                        <div className="flex gap-1 w-full">
+                            <input ref={inputNotaRef} type="text" className="flex-1 p-1.5 border-2 border-blue-200 rounded-lg text-[10px] font-bold uppercase outline-none" placeholder="Nota..." value={textoNotaTemp} onChange={(e) => setTextoNotaTemp(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') guardarNotaItem(idx); }} />
+                            <button onClick={() => guardarNotaItem(idx)} className="bg-blue-600 text-white px-2 rounded-lg text-[10px]"><i className="bi bi-check-lg"></i></button>
                         </div>
-                    </div>
+                    ) : (
+                        <>
+                            <button onClick={() => { setTextoNotaTemp(item.observacion || ''); setEditandoNotaIndex(idx); }} className="text-[10px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-1 rounded-lg">Nota</button>
+                            <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
+                                <button onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black">-</button>
+                                <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded">{item.cantidad}</span>
+                                <button onClick={() => ajustarCantidad(item.id, 1)} className="px-2 text-gray-500 font-black">+</button>
+                            </div>
+                        </>
+                    )}
+                </div>
+                {item.observacion && editandoNotaIndex !== idx && (
+                    <div className="mt-1 text-[9px] font-black text-amber-600 italic">★ {item.observacion}</div>
                 )}
-              </div>
-              {item.observacion && editandoNotaIndex !== idx && (
-                <div className="mt-2 bg-amber-50 p-1.5 rounded-lg border border-amber-200 text-[9px] text-amber-800 font-black italic uppercase leading-tight">★ {item.observacion}</div>
-              )}
             </div>
           ))}
-          {orden.length === 0 && <div className="p-8 text-center text-slate-300 font-black uppercase text-xs tracking-widest">Cesta Vacía</div>}
+          {orden.length === 0 && <div className="p-8 text-center text-slate-300 font-black uppercase text-xs tracking-widest">Carrito Vacío</div>}
         </div>
       </aside>
 
-      {/* MENÚ PRINCIPAL */}
       <main className="flex-1 p-8 overflow-y-auto bg-slate-50">
         {!categoriaActual ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             {[...new Set(menu.map(m => m.categoria))].filter(Boolean).map(cat => (
-              <button key={cat} onClick={() => setCategoriaActual(cat)} className="h-48 bg-white border-4 border-slate-100 rounded-[3.5rem] shadow-sm hover:shadow-2xl hover:-translate-y-1 transition-all font-black uppercase text-xs flex flex-col items-center justify-center gap-4 group">
+              <button key={cat} onClick={() => setCategoriaActual(cat)} className="h-48 bg-white border-4 border-slate-100 rounded-[3.5rem] shadow-sm hover:shadow-2xl transition-all font-black uppercase text-xs flex flex-col items-center justify-center gap-4 group">
                 <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-3xl group-hover:bg-red-50 transition-colors shadow-inner">📂</div>
-                <span className="px-4 leading-tight">{cat}</span>
+                <span>{cat}</span>
               </button>
             ))}
           </div>
         ) : (
           <div className="animate-fade-in">
-            <div className="flex items-center gap-6 mb-8">
-              <button onClick={() => setCategoriaActual(null)} className="p-3 bg-white rounded-2xl border-2 border-slate-100 text-red-600 hover:bg-red-50 transition-colors shadow-sm"><i className="bi bi-arrow-left text-xl"></i></button>
-              <h2 className="text-4xl font-black uppercase tracking-tighter text-slate-800 leading-none">{categoriaActual}</h2>
-            </div>
+            <button onClick={() => setCategoriaActual(null)} className="mb-6 p-3 bg-white rounded-2xl border-2 border-slate-100 text-red-600 shadow-sm transition-colors hover:bg-red-50"><i className="bi bi-arrow-left text-xl"></i></button>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
               {menu.filter(m => m.categoria === categoriaActual).map(item => (
-                <button key={item.id} onClick={() => agregarAlPedido(item)} className="p-6 bg-white border-2 border-slate-100 rounded-[2.5rem] flex flex-col items-center justify-between group min-h-[18rem] shadow-sm hover:shadow-2xl transition-all active:scale-95">
+                <button key={item.id} onClick={() => agregarAlPedido(item)} className="p-6 bg-white border-2 border-slate-100 rounded-[2.5rem] flex flex-col items-center justify-between shadow-sm hover:shadow-2xl transition-all active:scale-95 min-h-[18rem] group">
                   <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-4xl group-hover:scale-110 transition-transform shadow-inner">🍣</div>
-                  <div className="flex flex-col items-center gap-2 w-full flex-1 justify-center">
-                    <span className="font-black text-[13px] uppercase text-center text-slate-800 line-clamp-2 leading-tight px-1">{String(item.nombre)}</span>
-                    {/* DESCRIPCIÓN VISIBLE */}
-                    {item.descripcion && <span className="text-[10px] text-gray-500 font-bold uppercase text-center px-2 leading-tight italic bg-slate-50 rounded-lg py-1 w-full">{item.descripcion}</span>}
+                  
+                  <div className="flex flex-col items-center gap-2 w-full flex-1 justify-center mt-4">
+                    <span className="font-black text-[13px] uppercase text-center text-slate-800 line-clamp-2 leading-tight px-1">{item.nombre}</span>
+                    
+                    {item.descripcion && (
+                      <span className="text-[10px] text-gray-500 font-bold uppercase text-center px-2 italic bg-slate-50 rounded-lg py-1 w-full line-clamp-2">
+                        {item.descripcion}
+                      </span>
+                    )}
                   </div>
-                  <div className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs tracking-widest shadow-lg shadow-red-100 mt-2">${item.precio.toLocaleString('es-CL')}</div>
+
+                  <div className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs mt-3 shadow-lg group-hover:bg-red-700 transition-colors">
+                    ${item.precio.toLocaleString('es-CL')}
+                  </div>
                 </button>
               ))}
             </div>
@@ -281,25 +308,49 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user }) {
         )}
       </main>
 
-      {/* MODAL TICKET */}
+      {/* TICKET INVISIBLE PARA IMPRESIÓN AUTOMÁTICA (WEB) */}
+      {ultimoPedidoParaImprimir && (
+        <div className="hidden print:block fixed inset-0 bg-white z-[10000]">
+            <Ticket 
+              orden={ultimoPedidoParaImprimir.items} 
+              total={ultimoPedidoParaImprimir.total} 
+              numeroPedido={ultimoPedidoParaImprimir.numero_pedido} 
+              tipoEntrega={ultimoPedidoParaImprimir.tipo_entrega} 
+              fecha={new Date().toLocaleDateString('es-CL')} 
+              hora={ultimoPedidoParaImprimir.hora_pedido} 
+              cliente={ultimoPedidoParaImprimir.nombre_cliente} 
+              descripcion={ultimoPedidoParaImprimir.descripcion} 
+            />
+        </div>
+      )}
+
+      {/* VISTA PREVIA MODAL */}
       {mostrarVistaPrevia && (
-        <div className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setMostrarVistaPrevia(false)}>
-          <div className="bg-white rounded-[2.5rem] shadow-2xl overflow-hidden scale-in" onClick={e => e.stopPropagation()}>
-             <div className="p-8 bg-slate-100 max-h-[85vh] overflow-y-auto">
-                <Ticket orden={orden} total={totalFinal} numeroPedido={numeroPedidoVisual} tipoEntrega={tipoEntrega} fecha={new Date().toLocaleDateString('es-CL')} hora={horaPedido} cliente={nombreCliente} descripcion={descripcionGeneral} />
-             </div>
-             <button className="w-full py-5 bg-slate-900 text-white font-black uppercase text-xs tracking-widest hover:bg-black transition-colors" onClick={() => setMostrarVistaPrevia(false)}>CERRAR</button>
-          </div>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[99999] flex items-center justify-center p-4" onClick={() => setMostrarVistaPrevia(false)}>
+            <div className="bg-white rounded-[2.5rem] p-8 max-w-sm w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <Ticket 
+                  orden={orden} 
+                  total={totalFinal} 
+                  numeroPedido={numeroPedidoVisual} 
+                  tipoEntrega={tipoEntrega} 
+                  fecha={new Date().toLocaleDateString('es-CL')} 
+                  hora={horaPedido} 
+                  cliente={nombreCliente} 
+                  descripcion={descripcionGeneral} 
+                />
+                <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl">Cerrar Vista</button>
+            </div>
         </div>
       )}
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .scale-in { animation: scaleIn 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-        @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @media print {
+            body * { visibility: hidden; }
+            .print\\:block, .print\\:block * { visibility: visible; }
+            .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; }
+        }
       `}</style>
     </div>
   );

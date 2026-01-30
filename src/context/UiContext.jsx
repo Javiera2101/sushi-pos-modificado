@@ -1,89 +1,67 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useState, useEffect, useContext } from 'react';
 
-const UiContext = createContext();
+export const UiContext = createContext();
 
-export const useUi = () => useContext(UiContext);
+// Hook personalizado con validación de seguridad
+export const useUi = () => {
+  const context = useContext(UiContext);
+  if (!context) {
+    // Fallback preventivo para evitar que la app se rompa si se usa fuera del provider
+    return {
+      isOnline: navigator.onLine,
+      notificar: (msg) => console.log("Notificación (sin contexto):", msg)
+    };
+  }
+  return context;
+};
 
 export const UiProvider = ({ children }) => {
-    // Estado para Notificaciones (Toasts)
-    const [toasts, setToasts] = useState([]);
-    
-    // Estado para Modal de Confirmación
-    const [modalConfig, setModalConfig] = useState(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [mensaje, setMensaje] = useState(null);
 
-    // Función para mostrar notificación
-    const notificar = useCallback((mensaje, tipo = 'info') => {
-        const id = Date.now();
-        setToasts(prev => [...prev, { id, mensaje, tipo }]);
-        
-        // Auto eliminar a los 3 segundos
-        setTimeout(() => {
-            setToasts(prev => prev.filter(t => t.id !== id));
-        }, 3000);
-    }, []);
+  /**
+   * Muestra una notificación flotante en pantalla
+   * @param {string} msg - Texto a mostrar
+   * @param {'success'|'error'} tipo - Estilo visual
+   */
+  const notificar = (msg, tipo = 'success') => {
+    setMensaje({ msg: String(msg), tipo });
+    // Limpiar automáticamente tras 3 segundos
+    setTimeout(() => setMensaje(null), 3000);
+  };
 
-    // Función para pedir confirmación (Reemplaza a confirm())
-    const preguntar = useCallback((titulo, mensaje) => {
-        return new Promise((resolve) => {
-            setModalConfig({
-                titulo,
-                mensaje,
-                onConfirm: () => {
-                    setModalConfig(null);
-                    resolve(true);
-                },
-                onCancel: () => {
-                    setModalConfig(null);
-                    resolve(false);
-                }
-            });
-        });
-    }, []);
+  const toggleMobileMenu = () => setIsMobileMenuOpen(!isMobileMenuOpen);
 
-    return (
-        <UiContext.Provider value={{ notificar, preguntar }}>
-            {children}
-            
-            {/* RENDERIZADO DE NOTIFICACIONES (TOASTS) */}
-            <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2">
-                {toasts.map(t => (
-                    <div key={t.id} className={`px-4 py-3 rounded-lg shadow-lg text-white font-bold animate-bounce-in ${
-                        t.tipo === 'error' ? 'bg-red-500' : 
-                        t.tipo === 'success' ? 'bg-green-500' : 'bg-blue-600'
-                    }`}>
-                        {t.tipo === 'error' ? <i className="bi bi-exclamation-triangle-fill me-2"></i> : <i className="bi bi-info-circle-fill me-2"></i>}
-                        {t.mensaje}
-                    </div>
-                ))}
-            </div>
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
-            {/* RENDERIZADO DE MODAL DE CONFIRMACIÓN */}
-            {modalConfig && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4">
-                    <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden">
-                        <div className="bg-gray-100 p-4 border-b border-gray-200">
-                            <h3 className="font-bold text-lg text-gray-800">{modalConfig.titulo}</h3>
-                        </div>
-                        <div className="p-6">
-                            <p className="text-gray-600">{modalConfig.mensaje}</p>
-                        </div>
-                        <div className="p-4 bg-gray-50 flex justify-end gap-3">
-                            <button 
-                                onClick={modalConfig.onCancel}
-                                className="px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-200 font-medium transition-colors"
-                            >
-                                Cancelar
-                            </button>
-                            <button 
-                                onClick={modalConfig.onConfirm}
-                                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-bold transition-colors shadow-md"
-                            >
-                                Confirmar
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </UiContext.Provider>
-    );
+  return (
+    <UiContext.Provider value={{ 
+      isMobileMenuOpen, 
+      toggleMobileMenu,
+      isOnline,
+      notificar 
+    }}>
+      {children}
+      
+      {/* RENDERIZADO GLOBAL DE NOTIFICACIONES */}
+      {mensaje && (
+        <div className={`fixed bottom-6 right-6 z-[999999] p-4 rounded-2xl shadow-2xl text-white font-black uppercase text-xs animate-bounce flex items-center gap-3 border-2 transition-all duration-300 ${
+          mensaje.tipo === 'success' ? 'bg-green-600 border-green-400' : 'bg-red-600 border-red-400'
+        }`}>
+          <i className={`bi ${mensaje.tipo === 'success' ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill'} text-lg`}></i>
+          <span>{mensaje.msg}</span>
+        </div>
+      )}
+    </UiContext.Provider>
+  );
 };

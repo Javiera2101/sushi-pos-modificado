@@ -2,16 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth } from './firebase'; 
 
-// Contexto
-import { UiProvider } from './context/UiContext';
+// Contexto: Importamos useUi para saber el estado de la conexión
+import { UiProvider, useUi } from './context/UiContext';
 
-// Importación de Componentes (Separados)
+// Importación de Componentes
 import TomarPedido from './TomarPedido';
 import HistorialPedidos from './HistorialPedidos';
 import Caja from './Caja';
 import Gastos from './Gastos';
 
-// --- COMPONENTE DE LOGIN (Interno de App) ---
+// --- COMPONENTE DE LOGIN ---
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -83,12 +83,15 @@ const Login = () => {
   );
 };
 
-// --- CONTENIDO PRINCIPAL (Navegación y Rutas) ---
+// --- CONTENIDO PRINCIPAL ---
 const AppContent = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [seccion, setSeccion] = useState('PEDIDO');
   const [ordenParaEditar, setOrdenParaEditar] = useState(null);
+  
+  // Obtenemos el estado de conexión
+  const { isOnline } = useUi();
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (usuario) => {
@@ -123,12 +126,22 @@ const AppContent = () => {
   return (
     <div className="flex flex-col h-screen bg-slate-100 font-sans text-gray-800 overflow-hidden">
       {/* NAVBAR */}
-      <nav className="flex-shrink-0 h-20 bg-slate-900 px-8 flex items-center justify-between shadow-2xl z-50">
-        <div className="flex items-center gap-2">
+      <nav className="flex-shrink-0 h-20 bg-slate-900 px-8 flex items-center justify-between shadow-2xl z-50 relative">
+        <div className="flex items-center gap-3">
+            {/* LOGO */}
             <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">I</div>
             <span className="text-white font-black tracking-tighter text-xl">ISAKARI <span className="text-red-600">POS</span></span>
+            
+            {/* INDICADOR DE CONEXIÓN (NUEVO) */}
+            <div className={`ml-4 flex items-center gap-2 px-3 py-1 rounded-full border transition-colors ${isOnline ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400 animate-pulse'}`}>
+                <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
+                <span className="text-[9px] font-black uppercase tracking-widest">
+                    {isOnline ? 'ONLINE' : 'OFFLINE'}
+                </span>
+            </div>
         </div>
         
+        {/* MENU DE NAVEGACIÓN */}
         <div className="flex gap-2 p-1 bg-slate-800/50 rounded-2xl border border-slate-700">
           {[
             { id: 'PEDIDO', icon: 'bi-pencil-square', label: 'Tomar Pedido' },
@@ -164,7 +177,7 @@ const AppContent = () => {
       </nav>
 
       {/* ÁREA DE CONTENIDO */}
-      <div className="flex-1 overflow-hidden relative">
+      <div className="flex-1 overflow-hidden relative z-0">
         {seccion === 'PEDIDO' && (
           <TomarPedido 
             user={user} 

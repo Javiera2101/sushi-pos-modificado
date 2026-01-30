@@ -259,3 +259,5 @@ export const GestionProductos = () => {
         </div>
     );
 };
+
+export default GestionProductos;

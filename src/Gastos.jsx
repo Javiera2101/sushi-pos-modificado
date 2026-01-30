@@ -15,12 +15,11 @@ import {
   Timestamp,
   deleteDoc,
   addDoc,
-  enableIndexedDbPersistence,
-  query,
-  where
+  enableIndexedDbPersistence
 } from 'firebase/firestore';
 
 // --- 1. CONFIGURACIÓN E INICIALIZACIÓN SEGURA ---
+// Mantenemos tu configuración actual
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
@@ -55,13 +54,12 @@ const getLocalDate = () => {
 };
 
 /**
- * COMPONENTE GASTOS (Exportado como App para el Canvas)
+ * COMPONENTE GASTOS
  */
-export default function App() {
+export default function Gastos() {
   const [user, setUser] = useState(null);
   const [listaGastos, setListaGastos] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // Estado de Caja Abierta
   const [fechaInicioCaja, setFechaInicioCaja] = useState(null);
@@ -81,18 +79,6 @@ export default function App() {
   const colCajas = esPrueba ? "cajas_pruebas" : "cajas";
   
   const hoyString = getLocalDate();
-
-  // Gestión de Red
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
 
   // 1. Autenticación inicial
   useEffect(() => {
@@ -206,22 +192,20 @@ export default function App() {
   const totalHoy = listaGastos.reduce((acc, g) => acc + (Number(g.monto) || 0), 0);
 
   if (cargando && !user) return (
-    <div className="h-screen flex items-center justify-center bg-slate-900 font-black text-slate-500 uppercase tracking-widest animate-pulse">
+    <div className="h-full flex items-center justify-center bg-slate-900 font-black text-slate-500 uppercase tracking-widest animate-pulse">
         Sincronizando Isakari...
     </div>
   );
 
   return (
-    <div className="flex h-screen bg-slate-100 font-sans text-gray-800 overflow-hidden">
+    <div className="flex h-full w-full bg-slate-100 font-sans text-gray-800 overflow-hidden">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" />
 
       {/* SIDEBAR DE REGISTRO */}
       <aside className="w-[380px] h-full bg-white shadow-xl flex flex-col z-20 border-r border-gray-200">
         <div className="p-4 border-b bg-gray-50 flex-shrink-0">
             <div className="flex items-center justify-between mb-3">
-                <span className={`text-[9px] font-black px-3 py-1 rounded-full border ${isOnline ? 'bg-green-50 text-green-600 border-green-200' : 'bg-red-50 text-red-600 border-red-200'}`}>
-                    {isOnline ? 'ONLINE' : 'OFFLINE'}
-                </span>
+                {/* AQUI ELIMINAMOS EL BADGE DE ONLINE/OFFLINE */}
                 <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{esPrueba ? 'Pruebas' : 'Producción'}</span>
             </div>
             <h2 className="text-xl font-black text-gray-900 uppercase tracking-tighter leading-none mb-1">
@@ -237,50 +221,58 @@ export default function App() {
             </div>
         </div>
 
-        <form onSubmit={handleGuardar} className="p-4 flex-1 space-y-4 overflow-y-auto custom-scrollbar">
-            <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Categoría</label>
-                <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-                    <button type="button" onClick={() => setCategoria('Gasto General')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria !== 'Sueldo' ? 'bg-white shadow text-red-600' : 'text-gray-400'}`}>GENERAL</button>
-                    <button type="button" onClick={() => setCategoria('Sueldo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria === 'Sueldo' ? 'bg-white shadow text-blue-600' : 'text-gray-400'}`}>SUELDO</button>
+        {/* ESTRUCTURA FLEXIBLE: Se adapta a cualquier altura de pantalla */}
+        <form onSubmit={handleGuardar} className="flex-1 flex flex-col min-h-0 relative">
+            
+            {/* 1. ZONA DE SCROLL: Solo los inputs se deslizan si la pantalla es muy pequeña */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Categoría</label>
+                    <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
+                        <button type="button" onClick={() => setCategoria('Gasto General')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria !== 'Sueldo' ? 'bg-white shadow text-red-600' : 'text-gray-400'}`}>GENERAL</button>
+                        <button type="button" onClick={() => setCategoria('Sueldo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria === 'Sueldo' ? 'bg-white shadow text-blue-600' : 'text-gray-400'}`}>SUELDO</button>
+                    </div>
                 </div>
-            </div>
 
-            <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Descripción</label>
-                <input type="text" className="w-full p-3 rounded-xl border border-gray-100 bg-slate-50 focus:ring-2 focus:ring-red-100 outline-none text-xs font-bold uppercase" placeholder="Ej: Compra de mercadería..." value={descripcion} onChange={e => setDescripcion(e.target.value)} required />
-            </div>
-
-            {categoria === 'Sueldo' && (
-                <div className="space-y-1.5 animate-fade-in">
-                    <label className="text-[10px] font-black text-blue-500 uppercase tracking-widest ml-1">Trabajador</label>
-                    <input type="text" className="w-full p-3 rounded-xl border border-blue-100 bg-blue-50 focus:ring-2 focus:ring-blue-200 outline-none text-xs font-bold uppercase" placeholder="Nombre completo..." value={trabajador} onChange={e => setTrabajador(e.target.value)} required />
+                <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Descripción</label>
+                    <input type="text" className="w-full p-3 rounded-xl border border-gray-100 bg-slate-50 focus:ring-2 focus:ring-red-100 outline-none text-xs font-bold uppercase" placeholder="Ej: Compra de mercadería..." value={descripcion} onChange={e => setDescripcion(e.target.value)} required />
                 </div>
-            )}
 
-            <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Monto $</label>
-                <div className="flex items-center bg-slate-50 rounded-xl border border-gray-100 focus-within:ring-2 focus-within:ring-red-100 px-3 overflow-hidden">
-                    <span className="font-black text-gray-300 text-lg">$</span>
-                    <input 
-                      type="text" 
-                      className="w-full p-3 bg-transparent outline-none text-xl font-black text-slate-800" 
-                      placeholder="0" 
-                      value={monto} 
-                      onChange={(e) => setMonto(e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, "."))} 
-                      required 
-                    />
-                </div>
-            </div>
-
-            <div className="pt-4 flex gap-2">
-                {gastoEditar && (
-                    <button type="button" onClick={limpiar} className="flex-1 py-4 rounded-2xl bg-slate-100 text-slate-400 transition-all hover:bg-slate-200"><i className="bi bi-x-lg"></i></button>
+                {categoria === 'Sueldo' && (
+                    <div className="space-y-1.5 animate-fade-in">
+                        <label className="text-[10px] font-black text-blue-500 uppercase tracking-widest ml-1">Trabajador</label>
+                        <input type="text" className="w-full p-3 rounded-xl border border-blue-100 bg-blue-50 focus:ring-2 focus:ring-blue-200 outline-none text-xs font-bold uppercase" placeholder="Nombre completo..." value={trabajador} onChange={e => setTrabajador(e.target.value)} required />
+                    </div>
                 )}
-                <button type="submit" disabled={!idCajaAbierta} className={`flex-[4] py-4 rounded-2xl font-black text-white text-xs shadow-lg active:scale-95 transition-all uppercase tracking-widest disabled:opacity-30 disabled:grayscale ${gastoEditar ? 'bg-blue-600 shadow-blue-100' : 'bg-red-600 shadow-red-100'}`}>
-                    <i className={`bi ${gastoEditar ? 'bi-save-fill' : 'bi-plus-circle-fill'} me-2`}></i>
-                    {gastoEditar ? 'Actualizar' : 'Guardar Egreso'}
-                </button>
+
+                <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Monto $</label>
+                    <div className="flex items-center bg-slate-50 rounded-xl border border-gray-100 focus-within:ring-2 focus-within:ring-red-100 px-3 overflow-hidden">
+                        <span className="font-black text-gray-300 text-lg">$</span>
+                        <input 
+                        type="text" 
+                        className="w-full p-3 bg-transparent outline-none text-xl font-black text-slate-800" 
+                        placeholder="0" 
+                        value={monto} 
+                        onChange={(e) => setMonto(e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, "."))} 
+                        required 
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* 2. ZONA FIJA: Botones anclados abajo, siempre visibles */}
+            <div className="p-4 pt-2 flex-shrink-0 bg-white border-t border-gray-50 z-10">
+                 <div className="flex gap-2">
+                    {gastoEditar && (
+                        <button type="button" onClick={limpiar} className="flex-1 py-4 rounded-2xl bg-slate-100 text-slate-400 transition-all hover:bg-slate-200"><i className="bi bi-x-lg"></i></button>
+                    )}
+                    <button type="submit" disabled={!idCajaAbierta} className={`flex-[4] py-4 rounded-2xl font-black text-white text-xs shadow-lg active:scale-95 transition-all uppercase tracking-widest disabled:opacity-30 disabled:grayscale ${gastoEditar ? 'bg-blue-600 shadow-blue-100' : 'bg-red-600 shadow-red-100'}`}>
+                        <i className={`bi ${gastoEditar ? 'bi-save-fill' : 'bi-plus-circle-fill'} me-2`}></i>
+                        {gastoEditar ? 'Actualizar' : 'Guardar Egreso'}
+                    </button>
+                 </div>
             </div>
         </form>
 
@@ -291,15 +283,15 @@ export default function App() {
       </aside>
 
       {/* LISTADO DE GASTOS */}
-      <main className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden">
-        <div className="p-6 pb-2">
+      <main className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden min-w-0">
+        <div className="p-6 pb-2 flex-shrink-0">
             <h1 className="text-4xl font-black text-gray-900 uppercase tracking-tighter leading-none">Movimientos del Turno</h1>
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">
                 {idCajaAbierta ? `Filtrando gastos desde: ${fechaInicioCaja}` : 'Abra una caja para visualizar los egresos'}
             </p>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-3 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto px-6 pt-6 pb-32 space-y-3 custom-scrollbar">
             {listaGastos.map(g => (
                 <div key={g.id} className={`bg-white rounded-3xl p-5 shadow-sm border-2 transition-all hover:shadow-md flex items-center justify-between ${g.categoria === 'Sueldo' ? 'border-blue-100' : 'border-white'}`}>
                     <div className="flex items-center gap-4">
