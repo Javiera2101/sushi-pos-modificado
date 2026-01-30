@@ -1,19 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp, getApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, 
   collection, 
-  query, 
-  where, 
   onSnapshot, 
-  getDocs, 
   updateDoc, 
   doc,
   Timestamp 
 } from 'firebase/firestore'; 
 
-// --- CONFIGURACIÓN DE FIREBASE ---
+// --- CONFIGURACIÓN DE FIREBASE (Autocontenida para evitar errores de resolución) ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
@@ -21,146 +18,162 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'sushi';
 
+// Función para obtener fecha YYYY-MM-DD (UTC) consistente con el sistema de guardado
 const getLocalDate = () => new Date().toISOString().split('T')[0];
 
-export const Caja = () => {
-    // Totales base
+export default function Caja({ user: userProp }) {
+    const [user, setUser] = useState(userProp || null);
+    
+    // Estados Financieros
     const [totalBrutoRecaudado, setTotalBrutoRecaudado] = useState(0); 
     const [totalEnvios, setTotalEnvios] = useState(0);       
     const [totalGastos, setTotalGastos] = useState(0);       
-    
-    // Control Caja
     const [montoApertura, setMontoApertura] = useState(0);
     const [idCajaAbierta, setIdCajaAbierta] = useState(null);
+    const [fechaInicioCaja, setFechaInicioCaja] = useState(getLocalDate()); 
     const [cargando, setCargando] = useState(true);
     
-    // Desglose
+    // Desglose por método de pago (Montos)
     const [efectivo, setEfectivo] = useState(0);
     const [tarjeta, setTarjeta] = useState(0);
     const [transferencia, setTransferencia] = useState(0);
 
-    // Listas
+    // Cantidad de transacciones por método
+    const [conteoPagos, setConteoPagos] = useState({ Efectivo: 0, Tarjeta: 0, Transferencia: 0 });
+
+    // Listas de datos
     const [listaVentas, setListaVentas] = useState([]);
     const [listaGastos, setListaGastos] = useState([]);
-
-    // Scripts cargados
+    
+    // Estado de librerías externas (CDN)
     const [libsReady, setLibsReady] = useState(false);
 
-    const emailUsuario = auth.currentUser ? auth.currentUser.email : "";
+    // Configuración de rutas
+    const emailUsuario = user?.email || "";
     const esPrueba = emailUsuario === "prueba@isakari.com";
     const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
-    const COL_GASTOS = "gastos";
+    const COL_GASTOS = esPrueba ? "gastos_pruebas" : "gastos";
     const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
 
     const hoyString = getLocalDate();
 
-    // Carga dinámica de librerías para exportación
+    // Sincronización de Auth si no viene por prop
     useEffect(() => {
-        const loadScripts = async () => {
-            const scripts = [
-                { id: 'xlsx-script', src: 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js' },
-                { id: 'jspdf-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js' },
-                { id: 'jspdf-autotable-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js' }
-            ];
+        if (!userProp) {
+            const unsub = onAuthStateChanged(auth, setUser);
+            return () => unsub();
+        }
+    }, [userProp]);
 
-            const loadScript = (data) => new Promise((resolve) => {
-                if (document.getElementById(data.id)) return resolve();
-                const script = document.createElement('script');
-                script.id = data.id;
-                script.src = data.src;
-                script.async = false;
-                script.onload = () => resolve();
-                document.head.appendChild(script);
-            });
+    // Carga dinámica de scripts para exportación
+    useEffect(() => {
+        const scripts = [
+            { id: 'xlsx-script', src: 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js' },
+            { id: 'jspdf-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js' },
+            { id: 'jspdf-autotable-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js' }
+        ];
 
-            try {
-                for (const s of scripts) {
-                    await loadScript(s);
-                }
-                setLibsReady(true);
-            } catch (err) {
-                console.error("Error cargando librerías:", err);
-            }
-        };
-        loadScripts();
+        const loadScript = (data) => new Promise((resolve) => {
+            if (document.getElementById(data.id)) return resolve();
+            const script = document.createElement('script');
+            script.id = data.id; script.src = data.src; script.async = false;
+            script.onload = () => resolve();
+            document.head.appendChild(script);
+        });
+
+        Promise.all(scripts.map(loadScript))
+            .then(() => setLibsReady(true))
+            .catch(err => console.error("Error al cargar scripts de reporte:", err));
     }, []);
 
+    // 1. Detectar caja abierta y su fecha de apertura
     useEffect(() => {
-        setCargando(true);
-
-        const qCaja = query(collection(db, COL_CAJAS), where("estado", "==", "abierta"));
-        const unsubCaja = onSnapshot(qCaja, (snap) => {
-            if (!snap.empty) {
-                const d = snap.docs[0].data();
-                setMontoApertura(Number(d.monto_apertura) || 0);
-                setIdCajaAbierta(snap.docs[0].id);
+        if (!user) return;
+        const unsubCaja = onSnapshot(collection(db, COL_CAJAS), (snap) => {
+            const abierta = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .find(c => c.estado === "abierta");
+            
+            if (abierta) {
+                setMontoApertura(Number(abierta.monto_apertura) || 0);
+                setIdCajaAbierta(abierta.id);
+                if (abierta.fechaString) setFechaInicioCaja(abierta.fechaString);
             } else {
                 setMontoApertura(0);
                 setIdCajaAbierta(null);
+                setFechaInicioCaja(getLocalDate());
             }
         });
+        return () => unsubCaja();
+    }, [user, COL_CAJAS]);
 
-        const qVentas = query(collection(db, COL_ORDENES), where("fechaString", "==", hoyString));
-        const unsubVentas = onSnapshot(qVentas, (snap) => {
+    // 2. Escuchar Ventas y Gastos desde la apertura de caja
+    useEffect(() => {
+        if (!user) return;
+        setCargando(true);
+
+        const unsubVentas = onSnapshot(collection(db, COL_ORDENES), (snap) => {
             let sEfec = 0, sTarj = 0, sTrans = 0, recaudado = 0, envios = 0;
-            const ventasRaw = [];
+            let cEfec = 0, cTarj = 0, cTrans = 0;
+            const ventasFiltradas = [];
 
             snap.docs.forEach(doc => {
                 const data = doc.data();
-                if (data.estado_pago === 'Pagado' || data.estadoPago === 'Pagado') {
-                    ventasRaw.push({ id: doc.id, ...data });
-                    recaudado += Number(data.total_pagado || data.total) || 0;
+                const fechaPedido = data.fechaString || "";
+                const esDesdeApertura = fechaPedido >= fechaInicioCaja;
+                const estaPagado = String(data.estado_pago || data.estadoPago || "").toLowerCase() === 'pagado';
+                const estaEntregado = String(data.estado || "").toLowerCase() === 'entregado';
+
+                if (esDesdeApertura && estaPagado && estaEntregado) {
+                    ventasFiltradas.push({ id: doc.id, ...data });
+                    const montoTotal = Number(data.total_pagado || data.total) || 0;
+                    recaudado += montoTotal;
                     envios += Number(data.costo_despacho) || 0;
 
-                    if (data.detalles_pago) {
+                    if (data.detalles_pago && Array.isArray(data.detalles_pago)) {
                         data.detalles_pago.forEach(p => {
                             const m = Number(p.monto) || 0;
-                            if (p.metodo === 'Efectivo') sEfec += m;
-                            else if (p.metodo === 'Tarjeta') sTarj += m;
-                            else if (p.metodo === 'Transferencia') sTrans += m;
+                            if (p.metodo === 'Efectivo') { sEfec += m; cEfec++; }
+                            else if (p.metodo === 'Tarjeta') { sTarj += m; cTarj++; }
+                            else if (p.metodo === 'Transferencia') { sTrans += m; cTrans++; }
                         });
-                    } else if (data.desglosePago) {
-                        sEfec += Number(data.desglosePago.Efectivo) || 0;
-                        sTarj += Number(data.desglosePago.Tarjeta) || 0;
-                        sTrans += Number(data.desglosePago.Transferencia) || 0;
                     } else {
                         const m = data.metodo_pago || data.medioPago || 'Efectivo';
-                        const val = Number(data.total_pagado || data.total) || 0;
-                        if(m === 'Efectivo') sEfec += val;
-                        else if(m === 'Tarjeta') sTarj += val;
-                        else sTrans += val;
+                        if(m === 'Efectivo') { sEfec += montoTotal; cEfec++; }
+                        else if(m === 'Tarjeta') { sTarj += montoTotal; cTarj++; }
+                        else if(m === 'Transferencia') { sTrans += montoTotal; cTrans++; }
                     }
                 }
             });
-            ventasRaw.sort((a,b) => (b.numero_pedido || 0) - (a.numero_pedido || 0));
-            setListaVentas(ventasRaw);
+
+            setListaVentas(ventasFiltradas.sort((a,b) => (b.numero_pedido || 0) - (a.numero_pedido || 0)));
             setTotalBrutoRecaudado(recaudado);
             setTotalEnvios(envios);
             setEfectivo(sEfec);
             setTarjeta(sTarj);
             setTransferencia(sTrans);
+            setConteoPagos({ Efectivo: cEfec, Tarjeta: cTarj, Transferencia: cTrans });
             setCargando(false);
         });
 
-        const qGastos = query(collection(db, COL_GASTOS), where("fechaString", "==", hoyString));
-        const unsubGastos = onSnapshot(qGastos, (snap) => {
-            const gRaw = snap.docs.map(d => ({id: d.id, ...d.data()}));
-            gRaw.sort((a,b) => (b.fecha?.seconds||0) - (a.fecha?.seconds||0));
-            setListaGastos(gRaw);
-            setTotalGastos(gRaw.reduce((sum, i) => sum + (Number(i.monto)||0), 0));
+        const unsubGastos = onSnapshot(collection(db, COL_GASTOS), (snap) => {
+            const gastosFiltrados = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(g => (g.fechaString || "") >= fechaInicioCaja);
+
+            setListaGastos(gastosFiltrados.sort((a,b) => (b.fecha?.toMillis ? b.fecha.toMillis() : 0) - (a.fecha?.toMillis ? a.fecha.toMillis() : 0)));
+            setTotalGastos(gastosFiltrados.reduce((sum, i) => sum + (Number(i.monto)||0), 0));
         });
 
-        return () => { unsubCaja(); unsubVentas(); unsubGastos(); };
-    }, [hoyString, COL_ORDENES, COL_CAJAS]);
+        return () => { unsubVentas(); unsubGastos(); };
+    }, [user, fechaInicioCaja, COL_ORDENES, COL_GASTOS]);
 
-    // CÁLCULOS SOLICITADOS
     const totalVentasNetas = totalBrutoRecaudado - totalEnvios;
     const gananciaReal = totalVentasNetas - totalGastos;
     const efectivoEnCajon = (montoApertura + efectivo) - totalGastos;
 
-    const formatoPeso = (v) => v.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
+    const formatoPeso = (v) => (v || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
 
     const handleCerrarCaja = async () => {
         if (!idCajaAbierta) return;
@@ -171,226 +184,213 @@ export const Caja = () => {
                     fecha_cierre: Timestamp.now(),
                     monto_cierre_sistema: efectivoEnCajon,
                     total_ventas: totalBrutoRecaudado,
-                    total_ganancia: gananciaReal
+                    total_ganancia: gananciaReal,
+                    total_gastos: totalGastos
                 });
                 alert("Turno cerrado con éxito.");
-            } catch (e) { alert("Error al cerrar caja"); }
+            } catch (e) { console.error(e); }
         }
     };
 
-    const handleExportarExcel = () => {
-        if (!libsReady || !window.XLSX) return alert("Cargando herramientas...");
-        const XLSX = window.XLSX;
-        const wb = XLSX.utils.book_new();
-        
-        const resumenData = [
-            ["REPORTE DE CAJA", hoyString], [],
-            ["CÁLCULOS DE VENTAS", ""],
-            ["(+) Total Recaudado Bruto", totalBrutoRecaudado],
-            ["(-) Total Envíos", totalEnvios],
-            ["(=) TOTAL RECAUDADO (Ventas Netas)", totalVentasNetas],
-            ["(-) Gastos", totalGastos],
-            ["(=) GANANCIA REAL", gananciaReal],
-            [],
-            ["ARQUEO DE EFECTIVO", ""],
-            ["(+) Fondo Inicial", montoApertura],
-            ["(+) Ventas Efectivo", efectivo],
-            ["(-) Gastos", totalGastos],
-            ["(=) EFECTIVO EN CAJÓN", efectivoEnCajon]
-        ];
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumenData), "Resumen");
-
-        const ventasExcel = listaVentas.map(v => ({
-            "Nº": v.numero_pedido,
-            "Hora": v.hora_pedido,
-            "Cliente": v.nombre_cliente || 'Anónimo',
-            "Detalle": v.items ? v.items.map(i => `(${i.cantidad}) ${i.nombre}`).join(', ') : '',
-            "Pago": v.metodo_pago || v.medioPago,
-            "Total": v.total_pagado || v.total
-        }));
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ventasExcel), "Ventas");
-
-        XLSX.writeFile(wb, `Reporte_Caja_${hoyString}.xlsx`);
-    };
-
     const handleExportarPDF = () => {
-        if (!libsReady || !window.jspdf) return alert("Preparando herramientas de PDF...");
+        if (!libsReady || !window.jspdf) return alert("Preparando motor de PDF...");
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
         
-        doc.setFontSize(18); doc.text("ISAKARI SUSHI - REPORTE DE CAJA", 105, 15, {align:'center'});
-        doc.setFontSize(10); doc.text(`Fecha: ${hoyString}`, 105, 22, {align:'center'});
-        
-        doc.setFontSize(12); doc.text("1. Resumen de Operaciones", 14, 32);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(22); doc.text("ISAKARI SUSHI", 105, 15, { align: 'center' });
+        doc.setFontSize(14); doc.text("REPORTE DE CIERRE DETALLADO", 105, 22, { align: 'center' });
+        doc.setFontSize(10); doc.setFont("helvetica", "normal");
+        doc.text(`Caja iniciada el: ${fechaInicioCaja} | Emisión: ${hoyString}`, 105, 28, { align: 'center' });
+
+        // 1. RESUMEN FINANCIERO
+        doc.setFont("helvetica", "bold"); doc.text("1. RESUMEN DE OPERACIONES", 14, 40);
         doc.autoTable({
-            startY: 35,
+            startY: 42,
+            head: [['Concepto', 'Descripción', 'Monto']],
+            body: [
+                ['Ventas Netas', 'Productos entregados y pagados', formatoPeso(totalVentasNetas)],
+                ['Envíos / Repartidores', 'Monto destinado a delivery', formatoPeso(totalEnvios)],
+                ['Gastos del Turno', 'Egresos registrados', formatoPeso(totalGastos)],
+                ['GANANCIA REAL', 'Utilidad final neta', formatoPeso(gananciaReal)]
+            ],
+            theme: 'grid', headStyles: { fillColor: [16, 185, 129] }
+        });
+
+        // 2. ARQUEO DE EFECTIVO
+        doc.setFont("helvetica", "bold"); doc.text("2. ARQUEO DE EFECTIVO", 14, doc.lastAutoTable.finalY + 12);
+        doc.autoTable({
+            startY: doc.lastAutoTable.finalY + 15,
             head: [['Concepto', 'Cálculo', 'Monto']],
             body: [
-                ['Ventas Netas', 'Recaudado Bruto - Envíos', formatoPeso(totalVentasNetas)],
-                ['Gastos', 'Salidas registradas', formatoPeso(totalGastos)],
-                ['GANANCIA REAL', 'Ventas Netas - Gastos', formatoPeso(gananciaReal)],
-                ['Efectivo en Cajón', 'Saldo final en efectivo', formatoPeso(efectivoEnCajon)]
+                ['Fondo de Apertura', 'Saldo inicial en caja', formatoPeso(montoApertura)],
+                ['Ingresos Efectivo (+)', 'Ventas pagadas en efectivo', formatoPeso(efectivo)],
+                ['Gastos Pagados (-)', 'Salidas desde el cajón', `-${formatoPeso(totalGastos)}`],
+                ['TOTAL EN CAJÓN', 'Saldo físico esperado', formatoPeso(efectivoEnCajon)]
             ],
-            theme: 'grid',
-            headStyles: { fillColor: [44, 62, 80] }
+            theme: 'striped', headStyles: { fillColor: [30, 41, 59] }
         });
 
-        doc.text("2. Detalle de Ventas Pagadas", 14, doc.lastAutoTable.finalY + 10);
+        // 3. DESGLOSE POR TIPO DE PAGO
+        doc.setFont("helvetica", "bold"); doc.text("3. DESGLOSE POR TIPO DE PAGO", 14, doc.lastAutoTable.finalY + 12);
         doc.autoTable({
-            startY: doc.lastAutoTable.finalY + 13,
-            head: [['#', 'Hora', 'Detalle Pedido', 'Pago', 'Total']],
-            body: listaVentas.map(v => [
-                v.numero_pedido, 
-                v.hora_pedido, 
-                v.items ? v.items.map(i => `(${i.cantidad}) ${i.nombre}`).join(', ') : '',
-                v.metodo_pago || v.medioPago, 
-                formatoPeso(v.total_pagado || v.total)
-            ]),
-            theme: 'striped',
-            styles: { fontSize: 7 }
+            startY: doc.lastAutoTable.finalY + 15,
+            head: [['Medio de Pago', 'Nº Transacciones', 'Monto Total']],
+            body: [
+                ['Efectivo', conteoPagos.Efectivo, formatoPeso(efectivo)],
+                ['Tarjeta (Débito/Crédito)', conteoPagos.Tarjeta, formatoPeso(tarjeta)],
+                ['Transferencia Bancaria', conteoPagos.Transferencia, formatoPeso(transferencia)],
+                ['TOTALES', listaVentas.length, formatoPeso(totalBrutoRecaudado)]
+            ],
+            theme: 'grid', headStyles: { fillColor: [59, 130, 246] }
         });
 
-        doc.save(`Reporte_Caja_${hoyString}.pdf`);
+        // 4. DETALLE DE VENTAS (CON PRODUCTOS)
+        doc.setFont("helvetica", "bold"); doc.text("4. DETALLE DE VENTAS PAGADAS", 14, doc.lastAutoTable.finalY + 12);
+        doc.autoTable({
+            startY: doc.lastAutoTable.finalY + 15,
+            head: [['Nº', 'Hora', 'Cliente', 'Detalle de Productos', 'Total']],
+            body: listaVentas.map(v => [
+              v.numero_pedido || '-', 
+              v.hora_pedido || '-', 
+              v.nombre_cliente || 'Anónimo', 
+              v.items ? v.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ') : 'Sin detalle',
+              formatoPeso(v.total_pagado || v.total)
+            ]),
+            theme: 'striped', styles: { fontSize: 7 },
+            columnStyles: { 3: { cellWidth: 70 } }
+        });
+
+        // 5. DETALLE DE GASTOS
+        if (listaGastos.length > 0) {
+            doc.addPage();
+            doc.setFont("helvetica", "bold"); doc.text("5. DETALLE DE GASTOS Y EGRESOS", 14, 20);
+            doc.autoTable({
+                startY: 25,
+                head: [['Descripción / Motivo', 'Hora', 'Monto']],
+                body: listaGastos.map(g => [
+                    g.descripcion || 'Sin descripción',
+                    g.fecha?.seconds ? new Date(g.fecha.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '-',
+                    `-${formatoPeso(g.monto)}`
+                ]),
+                theme: 'grid', headStyles: { fillColor: [225, 29, 72] }, styles: { fontSize: 8 }
+            });
+        }
+
+        doc.save(`Reporte_Isakari_${fechaInicioCaja}.pdf`);
     };
 
-    if (cargando) return <div className="h-full flex items-center justify-center text-gray-400 font-black animate-pulse uppercase tracking-widest">Cargando reporte...</div>;
+    if (cargando) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-400 animate-pulse">Sincronizando Isakari...</div>;
 
     return (
-        <div className="flex flex-col h-full bg-slate-50 p-6 font-sans overflow-hidden text-gray-800">
-            {/* CABECERA */}
+        <div className="flex flex-col h-full bg-slate-100 p-6 font-sans overflow-hidden text-gray-800">
             <div className="flex items-center justify-between mb-6">
                 <div>
-                    <h2 className="text-3xl font-black text-gray-900 tracking-tighter uppercase leading-none">Caja Isakari</h2>
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1 inline-block">Fecha: {hoyString}</span>
+                    <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">Caja Isakari</h2>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                        {idCajaAbierta ? `Caja abierta desde: ${fechaInicioCaja}` : "Turno Cerrado"}
+                    </span>
                 </div>
                 <div className="flex gap-2">
-                    <button onClick={handleExportarExcel} className="bg-green-600 text-white px-3 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-green-700 transition-all flex items-center gap-2 shadow-sm">
-                        <i className="bi bi-file-excel"></i> Excel
+                    <button onClick={handleExportarPDF} className="bg-white border-2 border-slate-200 text-red-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-red-50 transition-all flex items-center gap-2">
+                        <i className="bi bi-file-pdf"></i> REPORTE PDF
                     </button>
-                    <button onClick={handleExportarPDF} className="bg-red-600 text-white px-3 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-red-700 transition-all flex items-center gap-2 shadow-sm">
-                        <i className="bi bi-file-pdf"></i> PDF
-                    </button>
-                    <button onClick={handleCerrarCaja} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-black transition-all flex items-center gap-2 ml-4">
-                        <i className="bi bi-door-closed-fill"></i> Cerrar Turno
-                    </button>
+                    <button onClick={handleCerrarCaja} disabled={!idCajaAbierta} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg transition-all ${idCajaAbierta ? 'bg-slate-900 text-white hover:bg-black' : 'bg-slate-200 text-slate-400'}`}>CERRAR TURNO</button>
                 </div>
             </div>
 
-            {/* INDICADORES CLAVE MEJORADOS (COLOR SÓLIDO Y TEXTO BLANCO) */}
+            {/* DASHBOARD INDICADORES */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-green-600 p-5 rounded-[1.5rem] border border-green-700 shadow-lg shadow-green-100 transition-transform hover:scale-[1.02]">
-                    <span className="text-[9px] font-black text-green-100 uppercase tracking-widest">Recaudación Neta</span>
-                    <div className="text-2xl font-black text-white tracking-tighter mt-1">{formatoPeso(totalVentasNetas)}</div>
-                    <small className="text-[8px] text-green-200 font-bold uppercase">Sin envíos</small>
+                <div className="bg-emerald-600 p-5 rounded-[2rem] shadow-xl text-white border border-emerald-700">
+                    <span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Ventas Netas</span>
+                    <div className="text-2xl font-black tracking-tighter mt-1">{formatoPeso(totalVentasNetas)}</div>
                 </div>
-                
-                <div className="bg-orange-600 p-5 rounded-[1.5rem] border border-orange-700 shadow-lg shadow-orange-100 transition-transform hover:scale-[1.02]">
-                    <span className="text-[9px] font-black text-orange-100 uppercase tracking-widest">A Repartidores</span>
-                    <div className="text-2xl font-black text-white tracking-tighter mt-1">{formatoPeso(totalEnvios)}</div>
-                    <small className="text-[8px] text-orange-200 font-bold uppercase">Total envíos</small>
+                <div className="bg-orange-600 p-5 rounded-[2rem] shadow-xl text-white border border-orange-700">
+                    <span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Envíos</span>
+                    <div className="text-2xl font-black tracking-tighter mt-1">{formatoPeso(totalEnvios)}</div>
                 </div>
-                
-                <div className="bg-red-600 p-5 rounded-[1.5rem] border border-red-700 shadow-lg shadow-red-100 transition-transform hover:scale-[1.02]">
-                    <span className="text-[9px] font-black text-red-100 uppercase tracking-widest">Gastos del Día</span>
-                    <div className="text-2xl font-black text-white tracking-tighter mt-1">{formatoPeso(totalGastos)}</div>
-                    <small className="text-[8px] text-red-200 font-bold uppercase">Salidas de caja</small>
+                <div className="bg-rose-600 p-5 rounded-[2rem] shadow-xl text-white border border-rose-700">
+                    <span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Gastos</span>
+                    <div className="text-2xl font-black tracking-tighter mt-1">{formatoPeso(totalGastos)}</div>
                 </div>
-                
-                <div className="bg-blue-600 p-5 rounded-[1.5rem] border border-blue-700 shadow-lg shadow-blue-100 transition-transform hover:scale-[1.02]">
-                    <span className="text-[9px] font-black text-blue-100 uppercase tracking-widest">Ganancia Real</span>
-                    <div className="text-2xl font-black text-white tracking-tighter mt-1">{formatoPeso(gananciaReal)}</div>
-                    <small className="text-[8px] text-blue-200 font-bold uppercase">Neto - Gastos</small>
+                <div className="bg-slate-900 p-5 rounded-[2rem] shadow-2xl text-white border border-slate-800">
+                    <span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Utilidad</span>
+                    <div className="text-2xl font-black tracking-tighter">{formatoPeso(gananciaReal)}</div>
                 </div>
             </div>
 
-            {/* ARQUEO DE EFECTIVO */}
-            <div className="bg-white rounded-[2rem] border border-slate-200 p-1 shadow-sm mb-6">
-                <div className="flex items-center justify-around py-4 px-6 flex-wrap gap-4 bg-slate-50/50 rounded-[1.8rem]">
+            {/* ARQUEO */}
+            <div className="bg-white rounded-[2.5rem] border-2 border-slate-100 p-1 shadow-sm mb-6">
+                <div className="flex items-center justify-around py-4 px-8 flex-wrap gap-4 bg-slate-50/50 rounded-[2.2rem]">
                     <div className="text-center">
-                        <small className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Fondo Inicial</small>
-                        <span className="font-black text-gray-900 text-lg">{formatoPeso(montoApertura)}</span>
+                        <small className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Apertura</small>
+                        <span className="font-black text-slate-700 text-lg">{formatoPeso(montoApertura)}</span>
                     </div>
-                    <div className="text-gray-300 font-light text-2xl">+</div>
                     <div className="text-center">
-                        <small className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Ventas Efec.</small>
-                        <span className="font-black text-green-600 text-lg">{formatoPeso(efectivo)}</span>
+                        <small className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Efectivo (+)</small>
+                        <span className="font-black text-emerald-600 text-lg">{formatoPeso(efectivo)}</span>
                     </div>
-                    <div className="text-gray-300 font-light text-2xl">-</div>
                     <div className="text-center">
-                        <small className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">Gastos</small>
-                        <span className="font-black text-red-600 text-lg">{formatoPeso(totalGastos)}</span>
+                        <small className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Gastos (-)</small>
+                        <span className="font-black text-rose-600 text-lg">{formatoPeso(totalGastos)}</span>
                     </div>
-                    <div className="text-gray-300 font-light text-2xl">=</div>
-                    <div className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-center shadow-xl">
-                        <small className="block text-[8px] font-black text-white/50 uppercase tracking-widest mb-0.5">DINERO EN CAJÓN</small>
+                    <div className="bg-slate-900 text-white px-10 py-3 rounded-2xl text-center shadow-2xl group">
+                        <small className="block text-[8px] font-black text-slate-500 uppercase tracking-widest mb-0.5">DINERO EN CAJÓN</small>
                         <span className="font-black text-xl tracking-tighter">{formatoPeso(efectivoEnCajon)}</span>
                     </div>
                 </div>
             </div>
 
-            {/* TABLAS DE DETALLE */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1 overflow-hidden">
-                <div className="flex flex-col bg-white rounded-[2rem] border border-gray-100 shadow-sm overflow-hidden">
-                    <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
-                        <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 m-0">Ventas Pagadas</h4>
-                        <span className="bg-green-100 text-green-700 text-[8px] font-black px-2 py-0.5 rounded-full uppercase">{listaVentas.length} Transacciones</span>
+            {/* TABLAS UI */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 overflow-hidden">
+                <div className="bg-white rounded-[2rem] border-2 border-slate-200 flex flex-col overflow-hidden shadow-sm">
+                    <div className="p-4 border-b bg-gray-50 flex justify-between items-center text-[10px] font-black uppercase text-slate-500 tracking-widest">
+                        Ventas Entregadas
+                        <span className="bg-slate-900 text-white text-[9px] px-3 py-1 rounded-full">{listaVentas.length}</span>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
                         {listaVentas.map(v => (
-                            <div key={v.id} className="flex items-center justify-between p-3 bg-slate-50/50 rounded-xl border border-slate-100 hover:bg-white transition-colors">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center font-black text-[10px] text-gray-400 shadow-sm">#{v.numero_pedido}</div>
-                                    <div>
-                                        <div className="text-[11px] font-black text-gray-800 uppercase leading-none">{v.nombre_cliente || 'Sin nombre'}</div>
-                                        <div className="text-[9px] text-gray-400 font-bold mt-1 uppercase tracking-tighter">{v.metodo_pago || v.medioPago} • {v.hora_pedido}</div>
+                            <div key={v.id} className="flex justify-between items-center p-3 bg-slate-50/50 rounded-xl border border-slate-100">
+                                <div className="max-w-[70%]">
+                                    <div className="text-[11px] font-black uppercase leading-none mb-1">#{v.numero_pedido} {v.nombre_cliente}</div>
+                                    <div className="text-[9px] text-slate-400 font-bold truncate">
+                                        {v.items ? v.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ') : 'Sin detalle'}
                                     </div>
+                                    <div className="text-[8px] text-emerald-500 font-black uppercase mt-1">{v.metodo_pago}</div>
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-[12px] font-black text-gray-900 tracking-tighter">{formatoPeso(v.total_pagado || v.total)}</div>
-                                </div>
+                                <div className="text-[12px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                <div className="flex flex-col bg-white rounded-[2rem] border border-gray-100 shadow-sm overflow-hidden">
-                    <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
-                        <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 m-0">Gastos</h4>
-                        <span className="bg-red-100 text-red-700 text-[8px] font-black px-2 py-0.5 rounded-full uppercase">{listaGastos.length} Movimientos</span>
+                <div className="bg-white rounded-[2rem] border-2 border-slate-200 flex flex-col overflow-hidden shadow-sm">
+                    <div className="p-4 border-b bg-gray-50 flex justify-between items-center text-[10px] font-black uppercase text-slate-500 tracking-widest">
+                        Gastos
+                        <span className="bg-rose-100 text-rose-600 text-[9px] px-3 py-1 rounded-full">{listaGastos.length}</span>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
                         {listaGastos.map(g => (
-                            <div key={g.id} className="flex items-center justify-between p-3 bg-red-50/30 rounded-xl border border-red-100/50 hover:bg-white transition-colors">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-red-400 shadow-sm"><i className="bi bi-arrow-down-short text-lg"></i></div>
-                                    <div>
-                                        <div className="text-[11px] font-black text-gray-800 uppercase leading-none">{g.descripcion}</div>
-                                        <div className="text-[9px] text-gray-400 font-bold mt-1 uppercase tracking-tighter">{new Date(g.fecha.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
-                                    </div>
-                                </div>
-                                <div className="text-[12px] font-black text-red-600 tracking-tighter">-{formatoPeso(g.monto)}</div>
+                            <div key={g.id} className="flex justify-between items-center p-3 bg-rose-50/30 rounded-xl border border-rose-100">
+                                <div className="text-[11px] font-black uppercase text-slate-700">{g.descripcion}</div>
+                                <div className="text-[12px] font-black text-rose-600">-{formatoPeso(g.monto)}</div>
                             </div>
                         ))}
                     </div>
                 </div>
             </div>
 
-            {/* DESGLOSE INFERIOR POR MEDIO PAGO */}
+            {/* DESGLOSE INFERIOR POR MEDIO DE PAGO (Información mantenida según solicitud) */}
             <div className="mt-6 flex justify-center gap-4">
-                {[
-                    { label: 'Efectivo', val: efectivo, color: 'bg-green-500' },
-                    { label: 'Tarjeta', val: tarjeta, color: 'bg-blue-500' },
-                    { label: 'Transf.', val: transferencia, color: 'bg-purple-500' }
-                ].map((medio, idx) => (
-                    <div key={idx} className="flex items-center gap-2 bg-white px-4 py-2 rounded-full border border-gray-100 shadow-sm">
-                        <div className={`w-2 h-2 rounded-full ${medio.color}`}></div>
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{medio.label}:</span>
-                        <span className="text-xs font-black text-gray-700 tracking-tighter">{formatoPeso(medio.val)}</span>
+                {[{l:'Efectivo', v:efectivo, c:'bg-emerald-500'}, {l:'Tarjeta', v:tarjeta, c:'bg-blue-500'}, {l:'Transf.', v:transferencia, c:'bg-indigo-500'}].map((m,i)=>(
+                    <div key={i} className="flex items-center gap-2 bg-white px-4 py-2 rounded-full border border-slate-200 shadow-sm transition-transform hover:-translate-y-1">
+                        <div className={`w-2 h-2 rounded-full ${m.c}`}></div>
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{m.l}:</span>
+                        <span className="text-[11px] font-black text-slate-800 tracking-tighter">{formatoPeso(m.v)}</span>
                     </div>
                 ))}
             </div>
+
+            <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }`}</style>
         </div>
     );
-};
-
-export default Caja;
+}

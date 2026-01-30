@@ -1,18 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { initializeApp, getApp, getApps } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithCustomToken, 
-  signInAnonymously, 
-  onAuthStateChanged 
-} from 'firebase/auth';
+import React, { useState, useEffect, createContext, useContext } from 'react';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
   getFirestore, 
   collection, 
-  onSnapshot,
-  doc,
-  updateDoc,
-  Timestamp
+  onSnapshot, 
+  updateDoc, 
+  doc, 
+  deleteDoc,
+  Timestamp 
 } from 'firebase/firestore';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
@@ -24,332 +20,372 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// CORRECCIÓN: Apuntar a 'sushi' por defecto
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'sushi';
+// Saneamiento de appId para Firestore
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'sushi-app';
+const appId = rawAppId.replace(/\//g, '_');
 
-// --- DETECCIÓN SEGURA DE ELECTRON ---
+// --- CONTEXTO DE UI ---
+const UiContext = createContext();
+const useUi = () => useContext(UiContext);
+
+const UiProvider = ({ children }) => {
+  const [mensaje, setMensaje] = useState(null);
+  const notificar = (msg, tipo) => {
+    setMensaje({ msg: String(msg), tipo }); 
+    setTimeout(() => setMensaje(null), 3000);
+  };
+  return (
+    <UiContext.Provider value={{ notificar }}>
+      {children}
+      {mensaje && (
+        <div className={`fixed bottom-4 right-4 z-[10000] p-4 rounded-xl shadow-2xl text-white font-black uppercase text-xs animate-bounce ${mensaje.tipo === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>
+          {mensaje.msg}
+        </div>
+      )}
+    </UiContext.Provider>
+  );
+};
+
+// Detectar Electron para impresión
 const ipcRenderer = (function() {
   try {
-    if (typeof window !== 'undefined' && typeof window.require === 'function') {
+    if (typeof window !== 'undefined' && window.require) {
       const electron = window.require('electron');
-      return electron ? electron.ipcRenderer : { send: () => {} };
+      return electron ? electron.ipcRenderer : null;
     }
-  } catch (e) {
-    return { send: () => {} };
-  }
-  return { send: () => {} };
+  } catch (e) { return null; }
+  return null;
 })();
 
-export function HistorialPedidos() {
-  const [user, setUser] = useState(null);
-  
-  // Manejamos dos listas para la búsqueda híbrida
-  const [pedidosRaiz, setPedidosRaiz] = useState([]);
-  const [pedidosArtifact, setPedidosArtifact] = useState([]);
-  
-  // Lista combinada final
+// --- COMPONENTE PRINCIPAL ---
+function HistorialPedidos({ onEditar, ordenParaEditar, user: userProp }) {
+  const { notificar } = useUi();
+  const [user, setUser] = useState(userProp || null);
   const [pedidos, setPedidos] = useState([]);
-  
   const [cargando, setCargando] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState('todos');
 
-  // --- ESTADOS PARA EL PAGO ---
+  // Estados para Cobro
   const [modalPago, setModalPago] = useState({ show: false, pedido: null });
-  const [modoPago, setModoPago] = useState('unico'); // 'unico' o 'multiple'
+  const [modoPago, setModoPago] = useState('unico'); 
   const [metodoSeleccionadoUnico, setMetodoSeleccionadoUnico] = useState('Efectivo');
+  const [montosPago, setMontosPago] = useState({ Efectivo: '', Tarjeta: '', Transferencia: '', Otro: '' });
+  const [metodosHabilitados, setMetodosHabilitados] = useState({ Efectivo: true, Tarjeta: false, Transferencia: false, Otro: false });
   const [aplicarDescuento, setAplicarDescuento] = useState(false);
   const [procesando, setProcesando] = useState(false);
-  
-  // Estados para Pago Múltiple (Cuadrícula 2x2)
-  const [metodosHabilitados, setMetodosHabilitados] = useState({
-      Efectivo: true,
-      Tarjeta: false,
-      Transferencia: false,
-      Otro: false
-  });
-  const [montosPago, setMontosPago] = useState({
-      Efectivo: '',
-      Tarjeta: '',
-      Transferencia: '',
-      Otro: ''
-  });
 
-  const emailUsuario = user ? user.email : "";
+  // Configuración de nombre de colección (RAÍZ)
+  const emailUsuario = user?.email || "";
   const esPrueba = emailUsuario === "prueba@isakari.com";
-  const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
+  const colName = esPrueba ? "ordenes_pruebas" : "ordenes";
 
-  // Auth
+  // Formateo CLP
+  const formatCLP = (v) => v ? v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".") : '';
+  const getRawNumber = (v) => Number(v.toString().replace(/\./g, '')) || 0;
+  const formatoPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
+
+  // Gestión de Autenticación
   useEffect(() => {
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
+        } else if (!auth.currentUser) {
           await signInAnonymously(auth);
         }
-      } catch (err) { console.error("Auth error:", err); }
+      } catch (error) {
+        console.error("Error de autenticación:", error);
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => { if (u) setUser(u); });
     return () => unsubscribe();
   }, []);
 
-  // Listeners
+  // Escucha de datos
   useEffect(() => {
     if (!user) return;
     setCargando(true);
-    const unsubRaiz = onSnapshot(collection(db, COL_ORDENES), (snapshot) => {
-        setPedidosRaiz(snapshot.docs.map(d => ({ id: d.id, ...d.data(), _origen: 'raiz' })));
-    });
-    const unsubArtifact = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', COL_ORDENES), (snapshot) => {
-        setPedidosArtifact(snapshot.docs.map(d => ({ id: d.id, ...d.data(), _origen: 'artifact' })));
-    });
-    return () => { unsubRaiz(); unsubArtifact(); };
-  }, [user, appId, COL_ORDENES]);
-
-  // Unificar pedidos
-  useEffect(() => {
-      const mapaPedidos = new Map();
-      [...pedidosRaiz, ...pedidosArtifact].forEach(p => mapaPedidos.set(p.id, p));
-      const listaUnica = Array.from(mapaPedidos.values());
-      listaUnica.sort((a, b) => (b.fecha?.toMillis ? b.fecha.toMillis() : 0) - (a.fecha?.toMillis ? a.fecha.toMillis() : 0));
-      setPedidos(listaUnica);
+    const collectionRef = collection(db, colName);
+    const unsub = onSnapshot(collectionRef, (snap) => {
+      const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      lista.sort((a, b) => (b.fecha?.toMillis ? b.fecha.toMillis() : 0) - (a.fecha?.toMillis ? a.fecha.toMillis() : 0));
+      setPedidos(lista);
       setCargando(false);
-  }, [pedidosRaiz, pedidosArtifact]);
+    }, (err) => {
+      console.error("Error al cargar historial:", err);
+      setCargando(false);
+    });
+    return () => unsub();
+  }, [user, colName]);
 
-  const cambiarEstado = async (id, nuevoEstado, origen) => {
+  // --- ACCIONES DE PEDIDO ---
+  const handleReimprimir = (pedido) => {
+    if (ipcRenderer) {
+      const itemsLimpios = (pedido.items && Array.isArray(pedido.items)) 
+        ? JSON.parse(JSON.stringify(pedido.items)) 
+        : [];
+
+      ipcRenderer.send('imprimir-ticket-raw', {
+        numeroPedido: pedido.numero_pedido || '...',
+        cliente: pedido.nombre_cliente || 'Anónimo',
+        items: itemsLimpios, 
+        total: pedido.total_pagado || pedido.total || 0,
+        tipoEntrega: pedido.tipo_entrega || 'LOCAL',
+        direccion: pedido.direccion || '',
+        telefono: pedido.telefono || '',
+        descripcion: pedido.descripcion || '' 
+      });
+      notificar("Reimprimiendo ticket...", "success");
+    } else {
+      notificar("Impresora no detectada (Modo Web)", "info");
+    }
+  };
+
+  const toggleEstado = async (pedido) => {
+    const nuevoEstado = pedido.estado === 'entregado' ? 'pendiente' : 'entregado';
     try {
-      const pedidoRef = origen === 'raiz' 
-        ? doc(db, COL_ORDENES, id) 
-        : doc(db, 'artifacts', appId, 'public', 'data', COL_ORDENES, id);
-      await updateDoc(pedidoRef, { estado: nuevoEstado });
-    } catch (e) { console.error(e); }
+      await updateDoc(doc(db, colName, pedido.id), { estado: nuevoEstado });
+      notificar(`Pedido marcado como ${nuevoEstado}`, "success");
+    } catch (e) {
+      notificar("Error al cambiar estado", "error");
+    }
   };
 
-  const abrirModalPago = (pedido) => {
-      setModalPago({ show: true, pedido });
-      setModoPago('unico');
-      setMetodoSeleccionadoUnico('Efectivo');
-      setAplicarDescuento(pedido.tiene_descuento || false);
-      setMetodosHabilitados({ Efectivo: true, Tarjeta: false, Transferencia: false, Otro: false });
-      setMontosPago({ Efectivo: '', Tarjeta: '', Transferencia: '', Otro: '' });
+  const eliminarPedido = async (pedido) => {
+    if (window.confirm(`¿Eliminar pedido #${pedido.numero_pedido} definitivamente?`)) {
+      try {
+        await deleteDoc(doc(db, colName, pedido.id));
+        notificar("Pedido eliminado", "success");
+      } catch (e) {
+        notificar("Error al eliminar", "error");
+      }
+    }
   };
 
-  // --- LÓGICA DE CÁLCULO ---
+  // --- LÓGICA DE COBRO ---
+  const abrirModalPago = (p) => {
+    setModalPago({ show: true, pedido: p });
+    setModoPago('unico');
+    setMetodosHabilitados({ Efectivo: true, Tarjeta: false, Transferencia: false, Otro: false });
+    setMontosPago({ Efectivo: '', Tarjeta: '', Transferencia: '', Otro: '' });
+    setAplicarDescuento(p.tiene_descuento || false);
+  };
+
   const totalOriginal = modalPago.pedido?.total || 0;
   const montoDescuento = aplicarDescuento ? Math.round(totalOriginal * 0.10) : 0;
   const totalACobrar = totalOriginal - montoDescuento;
 
-  const sumaPagosMultiples = Object.entries(montosPago)
-    .filter(([metodo]) => metodosHabilitados[metodo])
-    .reduce((acc, [_, val]) => acc + (parseInt(val) || 0), 0);
-    
-  const faltante = modoPago === 'unico' ? 0 : Math.max(0, totalACobrar - sumaPagosMultiples);
-  const vuelto = modoPago === 'multiple' && metodosHabilitados.Efectivo && sumaPagosMultiples > totalACobrar 
-                 ? sumaPagosMultiples - totalACobrar 
-                 : 0;
+  const sumaPagos = Object.entries(montosPago)
+    .filter(([m]) => metodosHabilitados[m])
+    .reduce((acc, [_, val]) => acc + getRawNumber(val), 0);
+
+  const faltante = Math.max(0, totalACobrar - sumaPagos);
+  const vuelto = (metodosHabilitados.Efectivo && sumaPagos > totalACobrar) ? (sumaPagos - totalACobrar) : 0;
 
   const autocompletarMonto = (metodo) => {
-      const otrosMontos = Object.entries(montosPago)
-        .filter(([key]) => key !== metodo && metodosHabilitados[key])
-        .reduce((acc, [_, val]) => acc + (parseInt(val) || 0), 0);
-      
-      const nuevoMonto = Math.max(0, totalACobrar - otrosMontos);
-      setMontosPago({ ...montosPago, [metodo]: nuevoMonto > 0 ? nuevoMonto.toString() : '' });
-  };
-
-  const toggleMetodo = (metodo) => {
-      const nuevoEstado = !metodosHabilitados[metodo];
-      setMetodosHabilitados({ ...metodosHabilitados, [metodo]: nuevoEstado });
-      if (!nuevoEstado) {
-          setMontosPago({ ...montosPago, [metodo]: '' });
-      } else {
-          autocompletarMonto(metodo);
-      }
+    if (faltante <= 0) return;
+    const montoActualEnCampo = getRawNumber(montosPago[metodo] || 0);
+    const nuevoMonto = montoActualEnCampo + faltante;
+    
+    setMetodosHabilitados(prev => ({ ...prev, [metodo]: true }));
+    setMontosPago(prev => ({
+      ...prev,
+      [metodo]: formatCLP(nuevoMonto)
+    }));
   };
 
   const confirmarPago = async () => {
-      if (modoPago === 'multiple' && faltante > 0) return;
-      
-      setProcesando(true);
-      try {
-          const { id, _origen } = modalPago.pedido;
-          const pedidoRef = _origen === 'raiz' 
-            ? doc(db, COL_ORDENES, id) 
-            : doc(db, 'artifacts', appId, 'public', 'data', COL_ORDENES, id);
+    if (modoPago === 'multiple' && faltante > 0) return;
+    setProcesando(true);
+    try {
+      const p = modalPago.pedido;
+      const detalles = modoPago === 'unico' 
+        ? [{ metodo: metodoSeleccionadoUnico, monto: totalACobrar }]
+        : Object.entries(montosPago).filter(([m]) => metodosHabilitados[m]).map(([m, v]) => ({ metodo: m, monto: getRawNumber(v) }));
 
-          const detalles = modoPago === 'unico' 
-            ? [{ metodo: metodoSeleccionadoUnico, monto: totalACobrar }]
-            : Object.entries(montosPago)
-                .filter(([metodo, monto]) => metodosHabilitados[metodo] && (parseInt(monto) || 0) > 0)
-                .map(([metodo, monto]) => ({ metodo, monto: parseInt(monto) }));
-
-          await updateDoc(pedidoRef, { 
-              estado_pago: 'Pagado',
-              metodo_pago: modoPago === 'unico' ? metodoSeleccionadoUnico : (detalles.length > 1 ? 'Múltiple' : detalles[0]?.metodo || 'Otro'),
-              detalles_pago: detalles,
-              tiene_descuento: aplicarDescuento,
-              monto_descuento: montoDescuento,
-              total_pagado: totalACobrar,
-              fecha_pago: Timestamp.now()
-          });
-          setModalPago({ show: false, pedido: null });
-      } catch (e) { 
-          alert("Error al registrar el pago"); 
-      } finally {
-          setProcesando(false);
-      }
+      await updateDoc(doc(db, colName, p.id), {
+        estado_pago: 'Pagado',
+        metodo_pago: modoPago === 'unico' ? metodoSeleccionadoUnico : 'Múltiple',
+        detalles_pago: detalles,
+        tiene_descuento: aplicarDescuento,
+        monto_descuento: montoDescuento,
+        total_pagado: totalACobrar,
+        fecha_pago: Timestamp.now()
+      });
+      setModalPago({ show: false, pedido: null });
+      notificar("¡Cobro realizado con éxito!", "success");
+    } catch (e) { 
+        console.error(e);
+        notificar("Error al procesar el pago", "error");
+    } finally { setProcesando(false); }
   };
 
-  const formatoPeso = (v) => v?.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
+  if (cargando && pedidos.length === 0) return <div className="p-10 text-center animate-pulse font-black text-slate-400">CARGANDO HISTORIAL...</div>;
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 p-4 font-sans relative text-gray-800">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-black text-gray-900 tracking-tighter uppercase">Historial de Pedidos</h2>
-        <div className="flex bg-white rounded-xl p-1 shadow-sm border border-gray-100">
-          {['todos', 'pendiente', 'entregado', 'cancelado'].map(estado => (
-            <button key={estado} onClick={() => setFiltroEstado(estado)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all uppercase ${filtroEstado === estado ? 'bg-red-600 text-white shadow-md' : 'text-gray-400 hover:text-gray-600'}`}>{estado}</button>
+    <div className="p-6 h-full overflow-y-auto bg-slate-50 font-sans">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h2 className="text-3xl font-black uppercase tracking-tighter text-slate-900 m-0">Ventas</h2>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+            {esPrueba ? 'Entorno de Pruebas' : 'Operación Real'}
+          </span>
+        </div>
+        <div className="flex bg-white rounded-2xl p-1 shadow-sm border border-slate-200">
+          {['todos', 'pendiente', 'entregado'].map(f => (
+            <button key={f} onClick={() => setFiltroEstado(f)} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${filtroEstado === f ? 'bg-slate-900 text-white shadow-md' : 'text-gray-400 hover:text-slate-600'}`}>{f}</button>
           ))}
         </div>
       </div>
 
-      <div className="grid gap-2 overflow-y-auto pr-1 pb-20">
-        {pedidos.filter(p => filtroEstado === 'todos' || p.estado === filtroEstado).map(pedido => (
-            <div key={pedido.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-base shadow-inner ${pedido.estado === 'entregado' ? 'bg-green-50 text-green-600' : pedido.estado === 'pendiente' ? 'bg-orange-50 text-orange-600' : 'bg-red-50 text-red-600'}`}>#{pedido.numero_pedido}</div>
-                <div>
-                  <h3 className="font-black text-gray-800 uppercase leading-none text-sm">{pedido.nombre_cliente || 'Cliente Anónimo'}</h3>
-                  <p className="text-[10px] text-gray-400 font-bold mt-1 uppercase tracking-widest">{pedido.tipo_entrega} • {pedido.hora_pedido}</p>
-                </div>
-              </div>
-              <div className="flex-1 px-2">
-                <div className="flex flex-wrap gap-1">
-                  {pedido.items?.map((item, i) => (
-                    <span key={i} className="bg-slate-50 px-2 py-0.5 rounded text-[9px] font-black text-gray-500 border border-slate-100 uppercase">{item.cantidad}x {item.nombre}</span>
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-col items-end gap-2 min-w-[150px]">
-                <div className="text-right">
-                    {pedido.tiene_descuento && <span className="text-[9px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold mb-1 block">10% OFF</span>}
-                    <span className="text-xl font-black text-gray-900 tracking-tighter">{formatoPeso(pedido.total_pagado || pedido.total)}</span>
-                </div>
-                <div className="flex gap-2">
-                    <select value={pedido.estado} onChange={(e) => cambiarEstado(pedido.id, e.target.value, pedido._origen)} className="bg-slate-100 rounded-lg px-2 py-1 text-[9px] font-black uppercase text-gray-600 outline-none cursor-pointer">
-                        <option value="pendiente">Pendiente</option>
-                        <option value="entregado">Entregado</option>
-                        <option value="cancelado">Cancelado</option>
-                    </select>
-                    {pedido.estado_pago === 'Pagado' ? (
-                        <div className="flex items-center gap-1 text-[9px] font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg border border-green-100 uppercase tracking-widest">PAGADO</div>
-                    ) : (
-                        <button onClick={() => abrirModalPago(pedido)} className="bg-slate-800 text-white px-3 py-1 rounded-lg text-[9px] font-black hover:bg-slate-700 transition-colors uppercase">Cobrar</button>
+      <div className="grid gap-4 pb-24">
+        {pedidos.filter(p => filtroEstado === 'todos' || p.estado === filtroEstado).map(pedido => {
+          const isPaid = pedido.estado_pago === 'Pagado';
+          const isDelivered = pedido.estado === 'entregado';
+          const estaSiendoEditado = ordenParaEditar?.id === pedido.id;
+          
+          return (
+            <div key={pedido.id} className={`p-5 rounded-[2.5rem] border-4 shadow-sm flex items-center justify-between bg-white transition-all ${estaSiendoEditado ? 'border-blue-500 ring-2 ring-blue-50' : (isDelivered ? 'border-green-500' : 'border-amber-400')}`}>
+              <div className="flex items-center gap-5 w-[60%]">
+                <div className={`w-14 h-14 rounded-2xl flex-shrink-0 flex items-center justify-center font-black text-white text-lg shadow-lg ${isDelivered ? 'bg-green-600 shadow-green-100' : 'bg-amber-500 shadow-amber-100'}`}>#{pedido.numero_pedido}</div>
+                <div className="w-full">
+                  <h4 className="font-black text-slate-900 uppercase text-base m-0 leading-tight">
+                    {String(pedido.nombre_cliente || 'Anónimo')}
+                  </h4>
+                  <div className="mt-2 flex flex-col gap-1">
+                    {pedido.items?.map((item, idx) => (
+                      <span key={idx} className="text-[10px] text-slate-600 font-bold uppercase leading-none">• {item.cantidad}x {String(item.nombre)}</span>
+                    ))}
+                    {pedido.descripcion && (
+                      <div className="mt-1 p-2 bg-yellow-50 rounded-lg border border-yellow-100">
+                        <p className="text-[9px] text-yellow-800 font-black italic m-0 uppercase">Nota: {String(pedido.descripcion)}</p>
+                      </div>
                     )}
+                  </div>
+                  <div className="flex gap-2 items-center mt-2">
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{pedido.tipo_entrega} • {pedido.hora_pedido}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-6">
+                <div className="text-right flex-shrink-0">
+                  <div className="text-2xl font-black text-slate-900 tracking-tighter leading-none">{formatoPeso(pedido.total_pagado || pedido.total)}</div>
+                  {isPaid && <div className="text-[9px] font-black text-green-600 uppercase tracking-widest mt-1">Pagado</div>}
+                </div>
+                
+                <div className="flex gap-2 flex-shrink-0">
+                  <button onClick={() => handleReimprimir(pedido)} className="w-10 h-10 flex items-center justify-center bg-white text-gray-400 rounded-xl border-2 border-gray-100 hover:text-blue-600 hover:border-blue-100 transition-all" title="Reimprimir"><i className="bi bi-printer-fill"></i></button>
+                  <button onClick={() => onEditar(pedido)} className={`w-10 h-10 flex items-center justify-center rounded-xl border-2 transition-all ${estaSiendoEditado ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-100 hover:bg-blue-50'}`} title="Editar"><i className="bi bi-pencil-fill"></i></button>
+                  <button onClick={() => toggleEstado(pedido)} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border-2 transition-all ${isDelivered ? 'bg-green-600 text-white border-green-600' : 'bg-white text-amber-600 border-amber-200 hover:bg-amber-50'}`}>{isDelivered ? 'ENTREGADO' : 'PENDIENTE'}</button>
+                  
+                  {!isPaid && <button onClick={() => abrirModalPago(pedido)} className="px-5 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase shadow-lg hover:bg-black transition-all">COBRAR</button>}
+                  
+                  <button onClick={() => eliminarPedido(pedido)} className="text-gray-300 hover:text-red-600 transition-colors px-2"><i className="bi bi-trash3-fill text-lg"></i></button>
                 </div>
               </div>
             </div>
-        ))}
+          );
+        })}
       </div>
 
+      {/* MODAL DE PAGO */}
       {modalPago.show && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm animate-fade-in border border-gray-100 max-h-[90vh] overflow-y-auto">
-                  
-                  <div className="text-center mb-4">
-                      <h3 className="text-lg font-black text-gray-900 uppercase tracking-tight">Cobrar Pedido #{modalPago.pedido?.numero_pedido}</h3>
-                  </div>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-2" onClick={() => setModalPago({ show: false, pedido: null })}>
+          <div className="bg-white rounded-[2rem] shadow-2xl p-5 w-full max-w-md border border-white max-h-[98vh] overflow-hidden flex flex-col scale-in" onClick={e => e.stopPropagation()}>
+            <h3 className="text-center font-black uppercase text-lg text-slate-900 mb-3 tracking-tight">Cobrar Pedido #{modalPago.pedido?.numero_pedido}</h3>
+            
+            <div className="bg-slate-50 p-3 rounded-2xl border-2 border-slate-100 mb-3">
+                <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-200">
+                    <div className="flex items-center gap-2">
+                        <span className="text-gray-500 text-[9px] font-black uppercase">¿10% DESC?</span>
+                        <button onClick={() => setAplicarDescuento(!aplicarDescuento)} className={`w-8 h-5 rounded-full p-1 transition-colors ${aplicarDescuento ? 'bg-red-600' : 'bg-slate-300'}`}>
+                            <div className={`w-3 h-3 bg-white rounded-full transition-transform ${aplicarDescuento ? 'translate-x-3' : ''}`}></div>
+                        </button>
+                    </div>
+                    {aplicarDescuento && <span className="text-red-600 font-black text-[10px]">-{formatoPeso(montoDescuento)}</span>}
+                </div>
+                <div className="flex justify-between items-center leading-none mt-1">
+                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Total</span>
+                  <span className="text-2xl font-black text-slate-900 tracking-tighter">{formatoPeso(totalACobrar)}</span>
+                </div>
+            </div>
 
-                  {/* DESCUENTO Y RESUMEN */}
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-4">
-                      <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-200">
-                          <div className="flex items-center gap-2">
-                              <span className="text-gray-600 text-[10px] font-black uppercase">¿10% OFF?</span>
-                              <button onClick={() => setAplicarDescuento(!aplicarDescuento)} className={`w-8 h-5 rounded-full p-0.5 transition-colors ${aplicarDescuento ? 'bg-red-600' : 'bg-slate-300'}`}>
-                                  <div className={`w-3.5 h-3.5 bg-white rounded-full shadow-sm transition-transform ${aplicarDescuento ? 'translate-x-3' : ''}`}></div>
-                              </button>
-                          </div>
-                          {aplicarDescuento && <span className="text-red-600 font-black text-[11px]">-{formatoPeso(montoDescuento)}</span>}
-                      </div>
-                      <div className="flex justify-between items-center">
-                          <span className="text-gray-900 text-[10px] font-black uppercase tracking-widest">Total</span>
-                          <div className="text-2xl font-black text-gray-900 tracking-tighter">{formatoPeso(totalACobrar)}</div>
-                      </div>
-                  </div>
-                  
-                  {/* SELECTOR DE MODO */}
-                  <div className="flex bg-gray-100 p-1 rounded-lg mb-4">
-                      <button onClick={() => setModoPago('unico')} className={`flex-1 py-1.5 rounded-md text-[9px] font-black uppercase transition-all ${modoPago === 'unico' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'}`}>Único</button>
-                      <button onClick={() => setModoPago('multiple')} className={`flex-1 py-1.5 rounded-md text-[9px] font-black uppercase transition-all ${modoPago === 'multiple' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'}`}>Múltiple</button>
-                  </div>
+            <div className="flex bg-gray-100 p-1 rounded-xl mb-3">
+              <button onClick={() => setModoPago('unico')} className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all ${modoPago === 'unico' ? 'bg-white text-slate-900 shadow' : 'text-gray-400'}`}>Único</button>
+              <button onClick={() => setModoPago('multiple')} className={`flex-1 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all ${modoPago === 'multiple' ? 'bg-white text-slate-900 shadow' : 'text-gray-400'}`}>Mixto</button>
+            </div>
 
-                  {/* CONTENIDO SEGÚN MODO */}
-                  {modoPago === 'unico' ? (
-                      <div className="grid grid-cols-2 gap-2 mb-6">
-                          {['Efectivo', 'Tarjeta', 'Transferencia', 'Otro'].map(m => (
-                              <button 
-                                key={m} 
-                                onClick={() => setMetodoSeleccionadoUnico(m)} 
-                                className={`py-2.5 rounded-xl font-black text-[10px] border-2 transition-all flex items-center justify-center gap-1 uppercase ${metodoSeleccionadoUnico === m ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-100 text-gray-400 hover:bg-gray-50'}`}
-                              >
-                                  {m}
-                              </button>
-                          ))}
-                      </div>
-                  ) : (
-                      <div className="mb-4">
-                          <div className="grid grid-cols-2 gap-2 mb-4">
-                              {['Efectivo', 'Tarjeta', 'Transferencia', 'Otro'].map(metodo => (
-                                  <div key={metodo} className={`relative flex flex-col p-2 rounded-xl border transition-all ${metodosHabilitados[metodo] ? 'bg-white border-green-200 shadow-sm' : 'bg-gray-50 border-gray-100 opacity-60'}`}>
-                                      <div className="flex justify-between items-center mb-1">
-                                          <button onClick={() => toggleMetodo(metodo)} className={`w-4 h-4 rounded flex items-center justify-center transition-colors border ${metodosHabilitados[metodo] ? 'bg-green-500 border-green-500 text-white' : 'bg-white border-gray-300 text-transparent'}`}>
-                                              <i className="bi bi-check-lg text-[8px]"></i>
-                                          </button>
-                                          <span className="text-[8px] font-black text-gray-400 uppercase tracking-widest">{metodo}</span>
-                                      </div>
-                                      
-                                      <div className="flex items-center gap-1">
-                                          <input 
-                                              type="number" 
-                                              placeholder="0"
-                                              disabled={!metodosHabilitados[metodo]}
-                                              className={`w-full bg-transparent border-none p-0 text-xs font-black text-gray-900 focus:ring-0 outline-none ${!metodosHabilitados[metodo] ? 'text-gray-300' : ''}`}
-                                              value={montosPago[metodo]}
-                                              onChange={(e) => setMontosPago({...montosPago, [metodo]: e.target.value})}
-                                              onFocus={(e) => e.target.select()}
-                                          />
-                                          {metodosHabilitados[metodo] && (
-                                              <button 
-                                                  onClick={() => autocompletarMonto(metodo)}
-                                                  className="text-green-600 hover:text-green-800 bg-green-50 p-1 rounded transition-colors flex items-center justify-center border border-green-100"
-                                              >
-                                                  <i className="bi bi-magic text-[10px]"></i>
-                                              </button>
-                                          )}
-                                      </div>
-                                  </div>
-                              ))}
-                          </div>
-
-                          <div className={`p-3 rounded-xl border flex justify-between items-center ${faltante > 0 ? 'bg-amber-50 border-amber-100 text-amber-600' : (vuelto > 0 ? 'bg-blue-50 border-blue-100 text-blue-600' : 'bg-green-50 border-green-100 text-green-600')}`}>
-                              <span className="text-[9px] font-black uppercase">{faltante > 0 ? 'Falta:' : (vuelto > 0 ? 'Vuelto:' : 'Listo:')}</span>
-                              <span className="font-black text-lg tracking-tighter">{formatoPeso(vuelto > 0 ? vuelto : Math.abs(faltante))}</span>
-                          </div>
-                      </div>
-                  )}
-
-                  <div className="flex gap-2 mt-4">
-                      <button onClick={() => setModalPago({ show: false, pedido: null })} className="flex-1 py-3 rounded-xl font-black text-gray-400 hover:bg-slate-100 transition-colors uppercase text-[10px]">Cancelar</button>
-                      <button onClick={confirmarPago} disabled={(modoPago === 'multiple' && faltante > 0) || procesando} className="flex-[2] py-3 rounded-xl font-black bg-green-600 text-white shadow-lg shadow-green-100 hover:bg-green-700 disabled:opacity-30 transition-all uppercase text-[10px]">
-                          {procesando ? '...' : 'Cobrar'}
-                      </button>
-                  </div>
+            {modoPago === 'unico' ? (
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                {['Efectivo', 'Tarjeta', 'Transferencia', 'Otro'].map(m => (
+                  <button key={m} onClick={() => setMetodoSeleccionadoUnico(m)} className={`py-3 rounded-xl font-black text-[10px] border-2 uppercase transition-all ${metodoSeleccionadoUnico === m ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-100 text-gray-400 hover:bg-gray-50'}`}>{m}</button>
+                ))}
               </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-2">
+                  {['Efectivo', 'Tarjeta', 'Transferencia', 'Otro'].map(m => (
+                    <div key={m} className={`flex flex-col p-2 rounded-xl border-2 transition-all ${metodosHabilitados[m] ? 'border-green-200 bg-white' : 'bg-gray-50 opacity-60 border-slate-100'}`}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <div onClick={() => setMetodosHabilitados({...metodosHabilitados, [m]: !metodosHabilitados[m]})} className={`w-4 h-4 rounded flex items-center justify-center cursor-pointer border ${metodosHabilitados[m] ? 'bg-green-500 border-green-500 text-white' : 'bg-white border-slate-300'}`}>
+                              {metodosHabilitados[m] && <i className="bi bi-check-lg text-[8px]"></i>}
+                          </div>
+                          <span className="text-[8px] font-black uppercase text-slate-600">{m}</span>
+                        </div>
+                        {faltante > 0 && (
+                          <button 
+                            onClick={() => autocompletarMonto(m)}
+                            className="w-4 h-4 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center hover:bg-indigo-600 hover:text-white transition-colors"
+                            title="Completar saldo"
+                          >
+                            <i className="bi bi-magic text-[8px]"></i>
+                          </button>
+                        )}
+                      </div>
+                      <input 
+                        type="text" 
+                        className="w-full bg-transparent text-left font-black outline-none text-slate-900 text-[11px]" 
+                        placeholder="$0" 
+                        value={montosPago[m]} 
+                        onChange={e => {
+                          setMetodosHabilitados({...metodosHabilitados, [m]: true});
+                          setMontosPago({...montosPago, [m]: formatCLP(e.target.value)});
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <div className={`mt-3 p-2.5 rounded-xl flex justify-between items-center font-black ${faltante > 0 ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
+                    <span className="uppercase text-[9px] tracking-widest">{faltante > 0 ? 'Pendiente:' : 'Vuelto:'}</span>
+                    <span className="text-base tracking-tighter leading-none">{formatoPeso(vuelto > 0 ? vuelto : Math.abs(faltante))}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-4 pt-3 border-t border-gray-100">
+              <button onClick={() => setModalPago({ show: false, pedido: null })} className="flex-1 py-3 text-[10px] font-black text-slate-400 uppercase">Cancelar</button>
+              <button onClick={confirmarPago} disabled={procesando || (modoPago === 'multiple' && faltante > 0)} className="flex-[2] py-3 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase shadow-xl active:scale-95 disabled:opacity-50 transition-all">{procesando ? '...' : 'Confirmar'}</button>
+            </div>
           </div>
+        </div>
       )}
+      <style>{`
+        .scale-in { animation: scaleIn 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+      `}</style>
     </div>
   );
 }
 
-export default HistorialPedidos;
+// Exportamos App
+export default function App(props) {
+  return (
+    <UiProvider>
+      <HistorialPedidos {...props} />
+    </UiProvider>
+  );
+}
