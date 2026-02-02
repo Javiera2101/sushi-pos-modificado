@@ -1,133 +1,64 @@
-/* sushi/src/css/Ticket.css */
+/* ... mantener estilos anteriores ... */
 
-/* Estilos generales del contenedor del ticket */
 .ticket-container {
-    width: 58mm;
-    background-color: white;
-    padding: 4px;
-    margin: 0 auto;
+    width: 100%;
+    max-width: 80mm; /* Ajuste para ticketeras estándar */
+    padding: 5px;
     font-family: 'Courier New', Courier, monospace;
-    font-size: 13px;
+    background: white;
     color: black;
-    /* AJUSTE CLAVE: Aumentamos el interlineado para que las letras no se peguen verticalmente */
-    line-height: 1.5; 
-    box-sizing: border-box;
 }
 
-/* Imágenes dentro del ticket (Logo) */
-.ticket-container img {
+/* ARREGLO PARA LA DIRECCIÓN */
+.ticket-address-container {
+    margin: 8px 0;
+    padding: 6px;
+    border: 1px solid #000; /* Un recuadro ayuda a resaltar la dirección */
+    background-color: #f9f9f9;
+}
+
+.ticket-address-label {
+    font-size: 10px;
+    font-weight: bold;
     display: block;
-    margin: 0 auto 15px auto; /* Más separación del logo al texto */
-    max-width: 90%;
-    filter: grayscale(100%) contrast(150%); 
+    text-transform: uppercase;
+    margin-bottom: 2px;
 }
 
-/* Utilidades */
-.text-center { text-align: center; }
-.text-end { text-align: right; }
-.text-start { text-align: left; }
-.fw-bold { font-weight: bold; }
-.text-uppercase { text-transform: uppercase; }
+.ticket-address-text {
+    font-size: 14px; /* Un poco más grande */
+    font-weight: 900;
+    line-height: 1.3;
+    display: block;
+    
+    /* Reglas críticas para que no se corte */
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
+    word-break: normal !important; /* Evita romper palabras a la mitad si es posible */
+    
+    text-transform: uppercase;
+}
 
-/* Líneas divisorias con mucho más aire */
-.linea-punteada {
-    border-top: 1px dashed black;
-    margin: 12px 0; /* AUMENTADO: De 8px a 12px para separar secciones claramente */
+.ticket-table {
     width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 13px;
 }
 
-.linea-punteada-doble {
-    border-top: 3px double black;
-    margin: 12px 0;
-    width: 100%;
+.ticket-total-section {
+    margin-top: 10px;
+    border-top: 2px solid #000;
+    padding-top: 5px;
+    text-align: right;
 }
 
-/* Secciones */
-.items-section {
-    margin-top: 15px;
-    margin-bottom: 15px;
+.ticket-total-value {
+    font-size: 18px;
+    font-weight: bold;
 }
 
-/* Separación extra IMPORTANTE entre cada producto */
-.items-section > div {
-    margin-bottom: 15px !important; /* Fuerza una separación grande entre cada sushi */
-    padding-bottom: 5px;
-}
-
-/* Estilos para datos de reparto */
-.datos-reparto {
-    margin-top: 15px;
-    border: 1px solid black;
-    padding: 8px;
-    font-size: 12px;
-    line-height: 1.6;
-}
-
-.campo-escribir {
-    margin-bottom: 8px;
-}
-
-/* CONFIGURACIÓN CRÍTICA PARA IMPRESIÓN (SOLUCIÓN 1) */
 @media print {
-    /* Definimos explícitamente el tamaño del papel.
-       '58mm' es el ancho fijo. 
-       'auto' permite que el largo sea infinito (rollo continuo).
-    */
-    @page { 
-        margin: 0; 
-        size: 58mm auto; 
-    }
-
-    body { 
-        margin: 0 !important; 
-        padding: 0 !important; 
-        background-color: white !important; 
-        width: 100% !important;
-    }
-
-    .ticket-container {
-        /* Al definir @page en 58mm, podemos usar 100% aquí */
-        width: 100% !important; 
-        max-width: none !important;
-        
-        box-sizing: border-box !important;
-        margin: 0 !important; 
-        padding: 0 !important; 
-        
-        border: none !important;
-        overflow: visible !important; 
-        display: block !important;
-        visibility: visible !important;
-        background-color: white !important;
-        position: static !important;
-        
-        /* Forzamos el interlineado en impresión también */
-        line-height: 1.5 !important;
-        
-        word-wrap: break-word; 
-        overflow-wrap: break-word;
-    }
-    
-    /* Aseguramos que los textos internos hereden el interlineado */
-    .ticket-container * {
-        text-shadow: none !important;
-        box-shadow: none !important;
-        visibility: visible !important;
-        line-height: 1.4 !important; 
-    }
-
-    .ticket-container img {
-        display: block !important;
-        max-width: 100% !important;
-    }
-    
-    /* Mantenemos los márgenes de separación de Bootstrap */
-    .mb-2 {
-        margin-bottom: 12px !important;
-    }
-    
-    .my-2 {
-        margin-top: 12px !important;
-        margin-bottom: 12px !important;
-    }
+    .no-print { display: none !important; }
 }

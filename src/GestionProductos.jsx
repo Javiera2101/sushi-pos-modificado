@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { db } from './firebase';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore'; // Quitamos query y orderBy
-import { useUi } from './context/UiContext'; // <--- Usamos tu nuevo sistema de UI
+import { db } from './firebase.js'; 
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import { useUi } from './context/UiContext.jsx';
 
+/**
+ * COMPONENTE: GESTIÓN DE PRODUCTOS
+ * Administra el menú Isakari con sincronización en tiempo real y diseño unificado.
+ */
 export const GestionProductos = () => {
     const { notificar, preguntar } = useUi(); 
     const [productos, setProductos] = useState([]);
     const [busqueda, setBusqueda] = useState('');
     const [modoEdicion, setModoEdicion] = useState(false);
     const [productoActual, setProductoActual] = useState(null); 
+    const [procesando, setProcesando] = useState(false);
     
     const [form, setForm] = useState({
         nombre: '',
@@ -17,26 +22,22 @@ export const GestionProductos = () => {
         descripcion: ''
     });
 
-    // Obtener lista de categorías para sugerencias
+    // Estilo común para los inputs del sistema Isakari
+    const inputStyle = "w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-[1.5rem] text-sm font-bold focus:border-red-500 focus:bg-white transition-all outline-none shadow-inner uppercase placeholder:text-slate-300";
+
     const categoriasUnicas = [...new Set(productos.map(p => p.categoria))].sort();
 
-    useEffect(() => {
-        // CORRECCIÓN: Quitamos 'orderBy' de la consulta a Firebase.
-        // Esto evita errores de índices y asegura que el listener funcione siempre en tiempo real.
+    // Función para cargar/sincronizar productos
+    const cargarProductos = () => {
         const coleccionRef = collection(db, "menu");
-        
-        const unsubscribe = onSnapshot(coleccionRef, (snapshot) => {
+        return onSnapshot(coleccionRef, (snapshot) => {
             const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            // Ordenamos aquí (en el navegador)
             docs.sort((a, b) => {
-                // 1. Primero por Categoría
                 const catA = (a.categoria || '').toString().toLowerCase();
                 const catB = (b.categoria || '').toString().toLowerCase();
                 if (catA < catB) return -1;
                 if (catA > catB) return 1;
-                
-                // 2. Luego por Nombre
                 return (a.nombre || '').toString().localeCompare((b.nombre || '').toString());
             });
 
@@ -45,11 +46,12 @@ export const GestionProductos = () => {
             console.error("Error escuchando productos:", error);
             notificar("Error de conexión al cargar productos", "error");
         });
+    };
 
+    useEffect(() => {
+        const unsubscribe = cargarProductos();
         return () => unsubscribe();
     }, []);
-
-    // --- MANEJADORES ---
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -65,9 +67,8 @@ export const GestionProductos = () => {
             precio: producto.precio,
             descripcion: producto.descripcion || ''
         });
-        // Scroll suave hacia arriba para ver el formulario
-        const formElement = document.getElementById('form-productos');
-        if(formElement) formElement.scrollIntoView({ behavior: 'smooth' });
+        const container = document.getElementById('gestion-container');
+        if(container) container.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const cancelarEdicion = () => {
@@ -78,16 +79,16 @@ export const GestionProductos = () => {
 
     const guardarProducto = async (e) => {
         e.preventDefault();
-        // Usamos notificar() en vez de alert()
         if (!form.nombre || !form.precio || !form.categoria) {
             return notificar("Nombre, Precio y Categoría son obligatorios", "error");
         }
 
+        setProcesando(true);
         const datosGuardar = {
-            nombre: form.nombre,
-            categoria: form.categoria,
+            nombre: form.nombre.toUpperCase(),
+            categoria: form.categoria.toUpperCase(),
             precio: Number(form.precio) || 0,
-            descripcion: form.descripcion || ''
+            descripcion: form.descripcion.toUpperCase() || ''
         };
 
         try {
@@ -102,160 +103,171 @@ export const GestionProductos = () => {
         } catch (error) {
             console.error("Error al guardar:", error);
             notificar("Error al guardar el producto", "error");
+        } finally {
+            setProcesando(false);
         }
     };
 
     const eliminarProducto = async (id, nombre) => {
-        // Usamos preguntar() en vez de confirm()
-        const confirmar = await preguntar("Eliminar Producto", `¿Estás seguro de ELIMINAR "${nombre}"?`);
+        const confirmar = window.confirm(`¿Estás seguro de ELIMINAR permanentemente "${nombre}" del menú?`);
         if (confirmar) {
             try {
                 await deleteDoc(doc(db, "menu", id));
-                notificar("Producto eliminado", "info");
+                notificar("Producto eliminado correctamente", "info");
             } catch (error) {
-                notificar("Error al eliminar", "error");
+                console.error("Error Firebase:", error);
+                notificar("Error al eliminar el registro", "error");
             }
         }
     };
 
-    // Filtro de búsqueda local
     const productosFiltrados = productos.filter(p => 
         (p.nombre || '').toLowerCase().includes(busqueda.toLowerCase()) || 
         (p.categoria || '').toLowerCase().includes(busqueda.toLowerCase())
     );
 
     return (
-        <div className="container mt-4 pb-5 h-full overflow-auto">
-            <h2 className="mb-4 text-center fw-bold text-secondary">
-                <i className="bi bi-box-seam"></i> Gestión de Menú
-            </h2>
+        <div id="gestion-container" className="h-full overflow-y-auto p-6 md:p-10 bg-slate-100 font-sans custom-scrollbar animate-fade-in">
+            <header className="mb-10 text-center">
+                <h2 className="text-4xl font-black uppercase tracking-tighter text-slate-900 leading-none m-0">Gestión de Menú</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-3">Administración de Productos en Tiempo Real</p>
+            </header>
 
-            {/* --- FORMULARIO (Agregar / Editar) --- */}
-            <div id="form-productos" className="card shadow-sm mb-5 border-0 bg-light">
-                <div className={`card-header fw-bold text-white ${modoEdicion ? 'bg-warning' : 'bg-primary'}`}>
-                    {modoEdicion ? '✏️ Editando Producto' : '➕ Nuevo Producto'}
+            {/* CARD DE FORMULARIO */}
+            <div id="form-productos" className="max-w-6xl mx-auto bg-white rounded-[2.5rem] shadow-xl p-10 mb-12 border-4 border-slate-50 relative overflow-hidden">
+                <div className={`absolute top-0 left-0 w-full h-1.5 ${modoEdicion ? 'bg-orange-500' : 'bg-red-600'}`}></div>
+                
+                <div className="flex items-center gap-3 mb-8">
+                    <div className={`w-3 h-3 rounded-full ${modoEdicion ? 'bg-orange-500 animate-pulse' : 'bg-red-600'}`}></div>
+                    <h3 className="font-black uppercase text-xs text-slate-400 tracking-widest">
+                        {modoEdicion ? 'Editando Producto Existente' : 'Registrar Nuevo Producto'}
+                    </h3>
                 </div>
-                <div className="card-body">
-                    <form onSubmit={guardarProducto} className="row g-3">
-                        <div className="col-md-4">
-                            <label className="form-label small text-muted">Nombre del Producto</label>
+
+                <form onSubmit={guardarProducto} className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                    <div className="md:col-span-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-3 mb-2 block">Nombre del Ítem</label>
+                        <input 
+                            type="text" name="nombre" value={form.nombre} onChange={handleInputChange}
+                            className={inputStyle}
+                            placeholder="EJ: PROMO 40" 
+                        />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-3 mb-2 block">Categoría</label>
+                        <input 
+                            type="text" name="categoria" value={form.categoria} onChange={handleInputChange} list="lista-cats-form"
+                            className={inputStyle}
+                            placeholder="SELECCIONA..." 
+                        />
+                        <datalist id="lista-cats-form">{categoriasUnicas.map(c => <option key={c} value={c} />)}</datalist>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-3 mb-2 block">Precio</label>
+                        <div className="relative">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-slate-300">$</span>
                             <input 
-                                type="text" className="form-control fw-bold" name="nombre" 
-                                placeholder="Ej: Handroll Pollo" 
-                                value={form.nombre} onChange={handleInputChange} 
+                                type="number" name="precio" value={form.precio} onChange={handleInputChange}
+                                className={inputStyle + " pl-8"}
+                                placeholder="0" 
                             />
                         </div>
-                        <div className="col-md-3">
-                            <label className="form-label small text-muted">Categoría</label>
-                            <input 
-                                type="text" className="form-control" name="categoria" 
-                                list="lista-categorias" 
-                                placeholder="Escribe o selecciona..." 
-                                value={form.categoria} onChange={handleInputChange} 
-                            />
-                            {/* Datalist para sugerir categorías existentes */}
-                            <datalist id="lista-categorias">
-                                {categoriasUnicas.map(cat => <option key={cat} value={cat} />)}
-                            </datalist>
-                        </div>
-                        <div className="col-md-2">
-                            <label className="form-label small text-muted">Precio</label>
-                            <div className="input-group">
-                                <span className="input-group-text">$</span>
-                                <input 
-                                    type="number" className="form-control" name="precio" 
-                                    placeholder="0" 
-                                    value={form.precio} onChange={handleInputChange} 
-                                />
-                            </div>
-                        </div>
-                        <div className="col-md-3">
-                            <label className="form-label small text-muted">Descripción (Opcional)</label>
-                            <input 
-                                type="text" className="form-control" name="descripcion" 
-                                placeholder="Ingredientes, detalles..." 
-                                value={form.descripcion} onChange={handleInputChange} 
-                            />
-                        </div>
-                        
-                        <div className="col-12 text-end mt-3">
-                            {modoEdicion && (
-                                <button type="button" className="btn btn-secondary me-2" onClick={cancelarEdicion}>
-                                    Cancelar
-                                </button>
-                            )}
-                            <button type="submit" className={`btn px-4 fw-bold text-white ${modoEdicion ? 'btn-warning' : 'btn-success'}`}>
-                                {modoEdicion ? 'Guardar Cambios' : 'Agregar Producto'}
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-black uppercase text-slate-400 ml-3 mb-2 block">Descripción (Opcional)</label>
+                        <input 
+                            type="text" name="descripcion" value={form.descripcion} onChange={handleInputChange}
+                            className={inputStyle}
+                            placeholder="DETALLES..." 
+                        />
+                    </div>
+                    
+                    <div className="md:col-span-4 flex justify-end gap-3 mt-4 border-t border-slate-50 pt-8">
+                        {modoEdicion && (
+                            <button type="button" onClick={cancelarEdicion} className="px-8 py-4 rounded-[1.5rem] font-black uppercase text-[10px] text-slate-400 hover:text-slate-600 transition-colors">
+                                Cancelar
                             </button>
+                        )}
+                        <button type="submit" disabled={procesando} className={`px-12 py-4 rounded-[1.5rem] font-black uppercase text-xs text-white shadow-lg active:scale-95 transition-all ${procesando ? 'bg-slate-400' : modoEdicion ? 'bg-orange-500 shadow-orange-100' : 'bg-red-600 shadow-red-100'}`}>
+                            {procesando ? 'Procesando...' : modoEdicion ? 'Actualizar Menú' : 'Registrar Producto'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            {/* TABLA DE INVENTARIO */}
+            <div className="max-w-6xl mx-auto bg-white rounded-[2.5rem] shadow-sm overflow-hidden border border-slate-200 mb-20">
+                <div className="p-8 border-b border-slate-50 flex flex-col md:flex-row justify-between items-center bg-slate-50/50 gap-6">
+                    <div>
+                        <h4 className="font-black uppercase text-slate-900 text-sm m-0">Inventario Isakari ({productos.length})</h4>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Base de datos sincronizada</p>
+                    </div>
+                    <div className="flex gap-2 w-full md:w-auto">
+                        <div className="relative flex-1 md:w-80">
+                            <i className="bi bi-search absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
+                            <input 
+                                type="text" placeholder="BUSCAR POR NOMBRE O CATEGORÍA..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+                                className="w-full p-4 pl-12 rounded-[1.5rem] bg-white border-2 border-slate-100 outline-none text-[11px] font-bold shadow-sm focus:border-red-400 transition-all uppercase" 
+                            />
                         </div>
-                    </form>
+                        <button 
+                            onClick={() => cargarProductos()}
+                            className="w-14 h-14 bg-white border-2 border-slate-100 rounded-2xl flex items-center justify-center text-slate-400 hover:text-red-600 hover:border-red-100 transition-all shadow-sm active:rotate-180 duration-500"
+                            title="Actualizar lista"
+                        >
+                            <i className="bi bi-arrow-clockwise text-xl"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div className="overflow-x-auto custom-scrollbar">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="text-[10px] font-black uppercase text-slate-400 border-b border-slate-50">
+                                <th className="p-8">Nombre del Producto</th>
+                                <th className="p-8">Categoría</th>
+                                <th className="p-8">Precio</th>
+                                <th className="p-8 text-right">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {productosFiltrados.map(prod => (
+                                <tr key={prod.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors group">
+                                    <td className="p-8">
+                                        <div className="font-black text-slate-800 uppercase text-sm leading-tight">{prod.nombre}</div>
+                                        <div className="text-[10px] text-slate-400 font-bold mt-1 uppercase tracking-tight">{prod.descripcion || 'SIN DESCRIPCIÓN'}</div>
+                                    </td>
+                                    <td className="p-8">
+                                        <span className="inline-block px-4 py-1.5 rounded-full bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest border border-slate-800 whitespace-nowrap">
+                                            {prod.categoria}
+                                        </span>
+                                    </td>
+                                    <td className="p-8 font-black text-red-600 text-lg">
+                                        ${Number(prod.precio).toLocaleString('es-CL')}
+                                    </td>
+                                    <td className="p-8 text-right">
+                                        <div className="flex justify-end gap-3">
+                                            <button onClick={() => iniciarEdicion(prod)} className="w-11 h-11 rounded-2xl bg-slate-100 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil-fill text-xs"></i></button>
+                                            <button onClick={() => eliminarProducto(prod.id, prod.nombre)} className="w-11 h-11 rounded-2xl bg-red-50 text-red-400 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Eliminar"><i className="bi bi-trash3-fill text-xs"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {productosFiltrados.length === 0 && (
+                        <div className="p-32 text-center">
+                            <i className="bi bi-box-seam text-6xl text-slate-100 block mb-4"></i>
+                            <span className="text-slate-300 font-black uppercase text-xs tracking-[0.3em]">No se encontraron resultados</span>
+                        </div>
+                    )}
                 </div>
             </div>
-
-            {/* --- LISTA DE PRODUCTOS --- */}
-            <div className="d-flex justify-content-between align-items-center mb-3">
-                <h4 className="text-secondary">Inventario ({productos.length})</h4>
-                <input 
-                    type="text" 
-                    className="form-control w-25" 
-                    placeholder="🔍 Buscar producto..." 
-                    value={busqueda}
-                    onChange={(e) => setBusqueda(e.target.value)}
-                />
-            </div>
-
-            <div className="table-responsive shadow-sm rounded bg-white">
-                <table className="table table-hover align-middle mb-0">
-                    <thead className="bg-light">
-                        <tr>
-                            <th scope="col" className="ps-4">Nombre</th>
-                            <th scope="col">Categoría</th>
-                            <th scope="col">Descripción</th>
-                            <th scope="col">Precio</th>
-                            <th scope="col" className="text-end pe-4">Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {productosFiltrados.map(prod => (
-                            <tr key={prod.id}>
-                                <td className="ps-4 fw-bold">{prod.nombre}</td>
-                                <td>
-                                    <span className="badge bg-info text-dark bg-opacity-25 border border-info px-2 py-1">
-                                        {prod.categoria}
-                                    </span>
-                                </td>
-                                <td className="text-muted small text-truncate" style={{maxWidth: '200px'}}>
-                                    {prod.descripcion || '-'}
-                                </td>
-                                <td className="fw-bold text-success">${Number(prod.precio).toLocaleString('es-CL')}</td>
-                                <td className="text-end pe-4">
-                                    <button 
-                                        className="btn btn-sm btn-outline-primary me-2" 
-                                        onClick={() => iniciarEdicion(prod)}
-                                        title="Editar"
-                                    >
-                                        <i className="bi bi-pencil-fill"></i>
-                                    </button>
-                                    <button 
-                                        className="btn btn-sm btn-outline-danger" 
-                                        onClick={() => eliminarProducto(prod.id, prod.nombre)}
-                                        title="Eliminar"
-                                    >
-                                        <i className="bi bi-trash-fill"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                        {productosFiltrados.length === 0 && (
-                            <tr>
-                                <td colSpan="5" className="text-center py-4 text-muted">
-                                    No se encontraron productos.
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
-            </div>
+            
+            <style>{`
+                .animate-fade-in { animation: fadeIn 0.4s ease-out; }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
         </div>
     );
 };

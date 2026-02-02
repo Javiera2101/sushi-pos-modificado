@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { auth } from './firebase'; 
+import { auth } from './firebase.js'; 
 
 // Contexto: Importamos useUi para saber el estado de la conexión
-import { UiProvider, useUi } from './context/UiContext';
+import { UiProvider, useUi } from './context/UiContext.jsx';
 
 // Importación de Componentes
-import TomarPedido from './TomarPedido';
-import HistorialPedidos from './HistorialPedidos';
-import Caja from './Caja';
-import Gastos from './Gastos';
+import TomarPedido from './TomarPedido.jsx';
+import HistorialPedidos from './HistorialPedidos.jsx';
+import Caja from './Caja.jsx';
+import Gastos from './Gastos.jsx';
+import GestionProductos from './GestionProductos.jsx';
 
 // --- COMPONENTE DE LOGIN ---
 const Login = () => {
@@ -90,7 +91,6 @@ const AppContent = () => {
   const [seccion, setSeccion] = useState('PEDIDO');
   const [ordenParaEditar, setOrdenParaEditar] = useState(null);
   
-  // Obtenemos el estado de conexión
   const { isOnline } = useUi();
 
   useEffect(() => {
@@ -128,11 +128,9 @@ const AppContent = () => {
       {/* NAVBAR */}
       <nav className="flex-shrink-0 h-20 bg-slate-900 px-8 flex items-center justify-between shadow-2xl z-50 relative">
         <div className="flex items-center gap-3">
-            {/* LOGO */}
             <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">I</div>
             <span className="text-white font-black tracking-tighter text-xl">ISAKARI <span className="text-red-600">POS</span></span>
             
-            {/* INDICADOR DE CONEXIÓN (NUEVO) */}
             <div className={`ml-4 flex items-center gap-2 px-3 py-1 rounded-full border transition-colors ${isOnline ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400 animate-pulse'}`}>
                 <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
                 <span className="text-[9px] font-black uppercase tracking-widest">
@@ -147,7 +145,8 @@ const AppContent = () => {
             { id: 'PEDIDO', icon: 'bi-pencil-square', label: 'Tomar Pedido' },
             { id: 'HISTORIAL', icon: 'bi-clock-history', label: 'Historial' },
             { id: 'CAJA', icon: 'bi-cash-coin', label: 'Caja' },
-            { id: 'GASTOS', icon: 'bi-wallet2', label: 'Gastos' }
+            { id: 'GASTOS', icon: 'bi-wallet2', label: 'Gastos' },
+            { id: 'PRODUCTOS', icon: 'bi-box-seam', label: 'Productos' }
           ].map((item) => (
             <button 
               key={item.id} 
@@ -176,7 +175,7 @@ const AppContent = () => {
         </button>
       </nav>
 
-      {/* ÁREA DE CONTENIDO */}
+      {/* ÁREA DE CONTENIDO DINÁMICO */}
       <div className="flex-1 overflow-hidden relative z-0">
         {seccion === 'PEDIDO' && (
           <TomarPedido 
@@ -201,12 +200,18 @@ const AppContent = () => {
         {seccion === 'GASTOS' && (
           <Gastos user={user} />
         )}
+
+        {seccion === 'PRODUCTOS' && (
+          <GestionProductos />
+        )}
       </div>
 
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" />
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
       `}</style>
     </div>
   );

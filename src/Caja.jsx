@@ -11,9 +11,10 @@ import {
   Timestamp,
   query,
   where,
-  getDocs
+  getDocs,
+  deleteDoc 
 } from 'firebase/firestore'; 
-// Se corrige la importación eliminando la extensión .jsx para asegurar la resolución en el entorno
+// Se corrige la importación eliminando la extensión explícita para asegurar la resolución en el entorno de compilación
 import { useUi } from './context/UiContext';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
@@ -29,25 +30,23 @@ const getLocalDate = () => new Date().toISOString().split('T')[0];
 
 /**
  * COMPONENTE CAJA
- * Gestiona turnos, dinero recaudado, historial y órdenes pendientes.
- * Configurado para leer datos desde la RAÍZ de la base de datos.
+ * Gestiona turnos, dinero recaudado e historial.
+ * PDF Mejorado: Incluye resumen financiero y tabla detallada de todas las órdenes del día.
+ * Función Especial: Re-apertura de cajas cerradas con aislamiento total de datos por fecha (estricto para el día seleccionado).
  */
 export default function Caja({ user: userProp }) {
     const { notificar } = useUi();
     const [user, setUser] = useState(userProp || null);
     const [authReady, setAuthReady] = useState(false);
     
-    // Navegación y Filtros
     const [vista, setVista] = useState('actual'); 
     const [filtroFechaHistorial, setFiltroFechaHistorial] = useState(''); 
 
-    // Estados de Control de Caja
     const [idCajaAbierta, setIdCajaAbierta] = useState(null);
     const [montoApertura, setMontoApertura] = useState(0);
     const [fechaInicioCaja, setFechaInicioCaja] = useState(getLocalDate()); 
     const [cargando, setCargando] = useState(true);
     
-    // Acumuladores de Dinero
     const [totalBrutoRecaudado, setTotalBrutoRecaudado] = useState(0); 
     const [totalEnvios, setTotalEnvios] = useState(0);       
     const [totalGastos, setTotalGastos] = useState(0);       
@@ -55,18 +54,15 @@ export default function Caja({ user: userProp }) {
     const [tarjeta, setTarjeta] = useState(0);
     const [transferencia, setTransferencia] = useState(0);
 
-    // Listas de Información
     const [listaVentas, setListaVentas] = useState([]);
     const [listaGastos, setListaGastos] = useState([]);
     const [cajasAnteriores, setCajasAnteriores] = useState([]);
-    const [ordenesNoPagadas, setOrdenesNoPagadas] = useState([]);
+    const [ordenesNoPagadasHoy, setOrdenesNoPagadasHoy] = useState([]); 
     
-    // UI Apertura
     const [montoAperturaInput, setMontoAperturaInput] = useState('');
     const [procesandoApertura, setProcesandoApertura] = useState(false);
     const [libsReady, setLibsReady] = useState(false);
 
-    // Definición de colecciones según el usuario
     const emailUsuario = user?.email || "";
     const esPrueba = emailUsuario === "prueba@isakari.com";
     const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
@@ -75,7 +71,18 @@ export default function Caja({ user: userProp }) {
 
     const hoyString = getLocalDate();
 
-    // 0. Autenticación (Prioritaria para evitar errores de permisos)
+    const formatoPeso = (v) => {
+        try {
+            if (v === null || v === undefined) return '$0';
+            if (typeof v === 'object' && !Array.isArray(v)) return '$0';
+            const num = typeof v === 'string' ? Number(v.replace(/\D/g, '')) : Number(v);
+            return (num || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
+        } catch (e) {
+            return '$0';
+        }
+    };
+
+    // 0. Autenticación
     useEffect(() => {
         const initAuth = async () => {
             try {
@@ -85,9 +92,7 @@ export default function Caja({ user: userProp }) {
                     await signInAnonymously(auth);
                 }
                 setAuthReady(true);
-            } catch (e) { 
-                console.error("Auth init error:", e); 
-            }
+            } catch (e) { console.error("Auth error:", e); }
         };
         initAuth();
         const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -97,7 +102,7 @@ export default function Caja({ user: userProp }) {
         return () => unsubscribe();
     }, []);
 
-    // Carga de librerías para PDF
+    // 1. Carga de librerías PDF
     useEffect(() => {
         const scripts = [
             { id: 'jspdf-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js' },
@@ -113,18 +118,26 @@ export default function Caja({ user: userProp }) {
         Promise.all(scripts.map(loadScript)).then(() => setLibsReady(true));
     }, []);
 
-    // 1. Escuchar Cajas (Desde la raíz)
+    // 2. Listener Cajas
     useEffect(() => {
         if (!authReady || !user) return;
-        
-        const path = collection(db, COL_CAJAS);
-        const unsub = onSnapshot(path, (snap) => {
-            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const unsub = onSnapshot(collection(db, COL_CAJAS), (snap) => {
+            const docs = snap.docs.map(d => {
+                const r = d.data();
+                return {
+                    id: d.id,
+                    ...r,
+                    total_ventas: Number(r.total_ventas || 0),
+                    total_gastos: Number(r.total_gastos || 0),
+                    monto_cierre_sistema: Number(r.monto_cierre_sistema || 0),
+                    monto_apertura: Number(r.monto_apertura || 0),
+                    total_envios: Number(r.total_envios || 0),
+                    total_ganancia: Number(r.total_ganancia || 0),
+                    fechaString: String(r.fechaString || 'S/F'),
+                    usuario_email: String(r.usuario_email || 'N/A')
+                };
+            });
             const abierta = docs.find(c => c.estado === "abierta");
-            const cerradas = docs
-                .filter(c => c.estado === "cerrada")
-                .sort((a, b) => (b.fecha_apertura?.seconds || 0) - (a.fecha_apertura?.seconds || 0));
-
             if (abierta) {
                 setMontoApertura(Number(abierta.monto_apertura) || 0);
                 setIdCajaAbierta(abierta.id);
@@ -134,38 +147,38 @@ export default function Caja({ user: userProp }) {
                 setIdCajaAbierta(null);
                 setFechaInicioCaja(getLocalDate());
             }
-            
-            setCajasAnteriores(cerradas);
-            setCargando(false);
-        }, (err) => {
-            console.error("Firestore boxes error:", err);
+            setCajasAnteriores(docs.filter(c => c.estado === "cerrada").sort((a,b) => (b.fecha_apertura?.seconds || 0) - (a.fecha_apertura?.seconds || 0)));
             setCargando(false);
         });
         return () => unsub();
     }, [authReady, user, COL_CAJAS]);
 
-    // 2. Escuchar Ventas y Gastos (Desde la raíz)
+    // 3. Listener Ventas/Gastos con Aislamiento por Fecha Estricto
     useEffect(() => {
         if (!authReady || !user) return;
+        const unsubVentas = onSnapshot(collection(db, COL_ORDENES), (snap) => {
+            let sEfec = 0, sTarj = 0, sTrans = 0, recaudado = 0, totalEnv = 0;
+            const actuales = [], pendientesHoy = [];
 
-        const pathOrdenes = collection(db, COL_ORDENES);
-        const unsubVentas = onSnapshot(pathOrdenes, (snap) => {
-            let sEfec = 0, sTarj = 0, sTrans = 0, recaudado = 0, envios = 0;
-            const actuales = [];
-            const pendientesPago = [];
+            snap.docs.forEach(docSnap => {
+                const rawData = docSnap.data();
+                const data = {
+                    id: docSnap.id,
+                    ...rawData,
+                    estado_pago: rawData.estado_pago || rawData.estadoPago || "Pendiente",
+                    metodo_pago: rawData.metodo_pago || rawData.medioPago || "N/A",
+                    nombre_cliente: rawData.nombre_cliente || rawData.cliente || "CLIENTE",
+                    total: Number(rawData.total || rawData.total_pagado || 0)
+                };
 
-            snap.docs.forEach(doc => {
-                const data = doc.data();
-                const pagado = String(data.estado_pago || "").toLowerCase() === 'pagado';
-                const entregado = String(data.estado || "").toLowerCase() === 'entregado';
+                const pagado = String(data.estado_pago).toLowerCase() === 'pagado';
                 const fecha = data.fechaString || "";
                 
-                // Si la caja está abierta, filtramos lo que pertenece al turno actual
-                if (idCajaAbierta && fecha >= fechaInicioCaja && pagado && entregado) {
-                    actuales.push({ id: doc.id, ...data });
-                    const total = Number(data.total_pagado || data.total) || 0;
-                    recaudado += total;
-                    envios += Number(data.costo_despacho) || 0;
+                // AISLAMIENTO POR FECHA: Se usa === para que al re-abrir una caja solo salgan los datos de ese día específico
+                if (idCajaAbierta && fecha === fechaInicioCaja && pagado && String(data.estado || "").toLowerCase() === 'entregado') {
+                    actuales.push(data);
+                    recaudado += data.total;
+                    totalEnv += Number(data.costo_despacho || 0);
 
                     if (data.detalles_pago && Array.isArray(data.detalles_pago)) {
                         data.detalles_pago.forEach(p => {
@@ -174,302 +187,379 @@ export default function Caja({ user: userProp }) {
                             else if (p.metodo === 'Tarjeta') sTarj += m;
                             else if (p.metodo === 'Transferencia') sTrans += m;
                         });
+                    } else if (data.desglosePago) {
+                        Object.entries(data.desglosePago).forEach(([met, val]) => {
+                            const m = Number(val) || 0;
+                            if (met === 'Efectivo') sEfec += m;
+                            else if (met === 'Tarjeta') sTarj += m;
+                            else if (met === 'Transferencia') sTrans += m;
+                        });
                     } else {
-                        const m = data.metodo_pago || 'Efectivo';
-                        if(m === 'Efectivo') sEfec += total;
-                        else if(m === 'Tarjeta') sTarj += total;
-                        else if(m === 'Transferencia') sTrans += total;
+                        const m = data.metodo_pago;
+                        if(m === 'Efectivo') sEfec += data.total;
+                        else if(m === 'Tarjeta') sTarj += data.total;
+                        else if(m === 'Transferencia') sTrans += data.total;
                     }
                 }
-
-                // Lista global de órdenes sin pagar
-                if (!pagado) {
-                    pendientesPago.push({ id: doc.id, ...data });
+                
+                // Filtro estricto para pendientes de la caja abierta (ej. día 29)
+                if (!pagado && idCajaAbierta && fecha === fechaInicioCaja) {
+                    pendientesHoy.push(data);
                 }
             });
 
             setListaVentas(actuales.sort((a,b) => (b.numero_pedido || 0) - (a.numero_pedido || 0)));
-            setOrdenesNoPagadas(pendientesPago.sort((a,b) => (b.fechaString || "").localeCompare(a.fechaString || "")));
+            setOrdenesNoPagadasHoy(pendientesHoy);
             setTotalBrutoRecaudado(recaudado);
-            setTotalEnvios(envios);
-            setEfectivo(sEfec);
-            setTarjeta(sTarj);
-            setTransferencia(sTrans);
+            setTotalEnvios(totalEnv);
+            setEfectivo(sEfec); setTarjeta(sTarj); setTransferencia(sTrans);
         });
 
-        const pathGastos = collection(db, COL_GASTOS);
-        const unsubGastos = onSnapshot(pathGastos, (snap) => {
+        const unsubGastos = onSnapshot(collection(db, COL_GASTOS), (snap) => {
             if (!idCajaAbierta) return;
-            const turno = snap.docs
-                .map(d => ({ id: d.id, ...d.data() }))
-                .filter(g => (g.fechaString || "") >= fechaInicioCaja);
-
+            // Filtro estricto para gastos por fecha
+            const turno = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(g => g.fechaString === fechaInicioCaja);
             setListaGastos(turno.sort((a,b) => (b.fecha?.seconds || 0) - (a.fecha?.seconds || 0)));
             setTotalGastos(turno.reduce((sum, i) => sum + (Number(i.monto)||0), 0));
         });
 
         return () => { unsubVentas(); unsubGastos(); };
-    }, [authReady, user, idCajaAbierta, fechaInicioCaja, COL_ORDENES, COL_GASTOS]);
+    }, [authReady, user, idCajaAbierta, fechaInicioCaja, COL_ORDENES, COL_GASTOS, hoyString]);
 
     const totalVentasNetas = totalBrutoRecaudado - totalEnvios;
     const gananciaReal = totalVentasNetas - totalGastos;
     const efectivoEnCajon = (montoApertura + efectivo) - totalGastos;
 
-    const formatoPeso = (v) => (v || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
-
     const handleAbrirCaja = async () => {
         const monto = Number(montoAperturaInput.replace(/\D/g, ''));
-        if (!montoAperturaInput || isNaN(monto)) return notificar("Monto de apertura inválido", "error");
-        
+        if (isNaN(monto)) return notificar("Monto inválido", "error");
         setProcesandoApertura(true);
         try {
-            await addDoc(collection(db, COL_CAJAS), {
-                estado: "abierta",
-                monto_apertura: monto,
-                fecha_apertura: Timestamp.now(),
-                fechaString: hoyString,
-                usuario_id: user.uid,
-                usuario_email: user.email
-            });
-            notificar("Turno iniciado", "success");
+            await addDoc(collection(db, COL_CAJAS), { estado: "abierta", monto_apertura: monto, fecha_apertura: Timestamp.now(), fechaString: hoyString, usuario_id: user.uid, usuario_email: user.email });
+            notificar("Caja iniciada", "success");
             setMontoAperturaInput('');
-        } catch (e) { 
-            notificar("Error al abrir caja", "error"); 
-        } finally { 
-            setProcesandoApertura(false); 
-        }
+        } catch (e) { notificar("Error al abrir", "error"); } finally { setProcesandoApertura(false); }
     };
 
     const handleCerrarCaja = async () => {
-        if (!idCajaAbierta || !window.confirm("¿Deseas cerrar el turno?")) return;
+        if (!idCajaAbierta) return;
+        if (ordenesNoPagadasHoy.length > 0) return notificar(`⚠️ Bloqueo: Cobrar ${ordenesNoPagadasHoy.length} pedidos del día ${fechaInicioCaja}.`, "error");
+        if (!window.confirm(`¿Deseas cerrar el turno del día ${fechaInicioCaja}?`)) return;
         try {
-            const ref = doc(db, COL_CAJAS, idCajaAbierta);
-            await updateDoc(ref, {
-                estado: "cerrada",
-                fecha_cierre: Timestamp.now(),
-                monto_cierre_sistema: efectivoEnCajon,
-                total_ventas: totalBrutoRecaudado,
-                total_gastos: totalGastos,
-                total_ganancia: gananciaReal,
-                monto_apertura: montoApertura
+            await updateDoc(doc(db, COL_CAJAS, idCajaAbierta), { 
+                estado: "cerrada", 
+                fecha_cierre: Timestamp.now(), 
+                monto_cierre_sistema: efectivoEnCajon, 
+                total_ventas: totalBrutoRecaudado, 
+                total_envios: totalEnvios,
+                total_gastos: totalGastos, 
+                total_ganancia: gananciaReal, 
+                monto_apertura: montoApertura 
             });
-            notificar("Turno cerrado con éxito", "success");
-        } catch (e) { console.error(e); }
+            notificar("Caja cerrada correctamente", "success");
+        } catch (e) { notificar("Error al cerrar", "error"); }
     };
 
-    // --- REPORTE PDF CON DETALLE DE PRODUCTOS ---
-    const handleExportarPDF = async (cajaData = null) => {
-        if (!libsReady || !window.jspdf) return notificar("Preparando motor de PDF...", "error");
-        notificar("Generando reporte con detalles...", "success");
+    const handleReabrirCaja = async (caja) => {
+        if (idCajaAbierta) return notificar("Ya hay una caja abierta. Ciérrala antes de re-abrir otra.", "error");
+        if (!window.confirm(`¿Estás seguro de re-abrir la caja del día ${caja.fechaString}? Verás únicamente los datos de ese día.`)) return;
 
-        const isHistorical = !!cajaData;
-        const fechaReporte = isHistorical ? cajaData.fechaString : fechaInicioCaja;
-        
-        let itemsDetallados = [];
-        if (isHistorical) {
-            const path = collection(db, COL_ORDENES);
-            const snap = await getDocs(path);
-            itemsDetallados = snap.docs
-                .map(d => d.data())
-                .filter(o => o.fechaString === fechaReporte && String(o.estado_pago).toLowerCase() === 'pagado');
-        } else {
-            itemsDetallados = listaVentas;
+        try {
+            await updateDoc(doc(db, COL_CAJAS, caja.id), {
+                estado: "abierta",
+                fecha_cierre: null
+            });
+            notificar(`Caja del ${caja.fechaString} re-abierta`, "success");
+            setVista('actual'); 
+        } catch (e) {
+            notificar("Error al intentar re-abrir la caja", "error");
         }
+    };
 
-        const data = cajaData || {
-            fechaString: fechaInicioCaja,
-            total_ventas: totalBrutoRecaudado,
-            total_gastos: totalGastos,
-            total_ganancia: gananciaReal,
-            monto_cierre_sistema: efectivoEnCajon,
-            monto_apertura: montoApertura
+    const handleEliminarPedido = async (id, numero) => {
+        if (!window.confirm(`¿Estás seguro de eliminar el pedido #${numero}? Esta acción es permanente.`)) return;
+        try {
+            await deleteDoc(doc(db, COL_ORDENES, id));
+            notificar(`Pedido #${numero} eliminado`, "success");
+        } catch (e) {
+            console.error(e);
+            notificar("Error al eliminar", "error");
+        }
+    };
+
+    const handleExportarPDF = async (cajaData = null) => {
+        if (!libsReady || !window.jspdf) return notificar("Iniciando motor PDF...", "error");
+        
+        const data = cajaData || { 
+            fechaString: fechaInicioCaja, 
+            total_ventas: totalBrutoRecaudado, 
+            total_envios: totalEnvios,
+            total_gastos: totalGastos, 
+            total_ganancia: gananciaReal, 
+            monto_cierre_sistema: efectivoEnCajon, 
+            monto_apertura: montoApertura 
         };
+
+        let pedidosParaDetalle = [];
+        if (!cajaData) {
+            pedidosParaDetalle = listaVentas;
+        } else {
+            const q = query(collection(db, COL_ORDENES), where("fechaString", "==", data.fechaString));
+            const snap = await getDocs(q);
+            pedidosParaDetalle = snap.docs.map(d => d.data())
+                .filter(o => String(o.estado_pago || o.estadoPago).toLowerCase() === 'pagado')
+                .sort((a,b) => (a.numero_pedido || 0) - (b.numero_pedido || 0));
+        }
 
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF();
+
+        pdf.setFontSize(18);
+        pdf.text("ISAKARI SUSHI - REPORTE DE CAJA", 105, 15, { align: 'center' });
+        pdf.setFontSize(10);
+        pdf.text(`Fecha Turno: ${data.fechaString}`, 105, 22, { align: 'center' });
+
+        const ventasNetas = data.total_ventas - (data.total_envios || 0);
         
-        pdf.setFont("helvetica", "bold"); pdf.setFontSize(20); 
-        pdf.text("ISAKARI SUSHI", 105, 15, { align: 'center' });
-        pdf.setFontSize(12); 
-        pdf.text(`REPORTE DE CIERRE DETALLADO - ${data.fechaString}`, 105, 22, { align: 'center' });
-        
-        // Tabla de resumen
-        pdf.autoTable({
-            startY: 30,
-            head: [['Concepto', 'Valor']],
+        pdf.autoTable({ 
+            startY: 30, 
+            head: [['Indicador de Turno', 'Valor en Pesos']], 
             body: [
-                ['Apertura de Turno', formatoPeso(data.monto_apertura)],
-                ['Recaudado Total', formatoPeso(data.total_ventas)],
-                ['Gastos Registrados', formatoPeso(data.total_gastos)],
-                ['Utilidad del Turno', formatoPeso(data.total_ganancia)],
-                ['EFECTIVO FINAL EN GAVETA', formatoPeso(data.monto_cierre_sistema)]
-            ],
-            theme: 'grid', headStyles: { fillColor: [30, 41, 59] }
+                ['Monto Caja Inicial', formatoPeso(data.monto_apertura)], 
+                ['Ventas Netas (Sin Envíos)', formatoPeso(ventasNetas)], 
+                ['Recaudación por Repartos', formatoPeso(data.total_envios)], 
+                ['Gastos Registrados', formatoPeso(data.total_gastos)], 
+                ['Ganancia Real (Ventas - Gastos)', formatoPeso(data.total_ganancia)], 
+                ['TOTAL FINAL EN GAVETA (EFECTIVO)', formatoPeso(data.monto_cierre_sistema)]
+            ], 
+            theme: 'grid',
+            headStyles: { fillStyle: 'DF', fillColor: [33, 37, 41] },
+            columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } }
         });
 
-        // Detalle de Pedidos
-        pdf.setFontSize(14); 
-        pdf.text("DETALLE DE VENTAS", 14, pdf.lastAutoTable.finalY + 15);
-        
+        pdf.setFontSize(12);
+        pdf.text("DETALLE DE ÓRDENES DEL DÍA", 14, pdf.lastAutoTable.finalY + 15);
+
+        const rowsPedidos = pedidosParaDetalle.map(o => [
+            o.numero_pedido,
+            o.nombre_cliente,
+            (o.items || []).map(i => `${i.cantidad}x ${i.nombre}`).join(', '),
+            o.tipo_entrega,
+            formatoPeso(o.total),
+            o.metodo_pago || o.medioPago || 'N/A'
+        ]);
+
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 20,
-            head: [['N°', 'Cliente', 'Detalle Productos', 'Total']],
-            body: itemsDetallados.map(v => [
-                v.numero_pedido || '-',
-                v.nombre_cliente || 'ANÓNIMO',
-                v.items?.map(i => `${i.cantidad}x ${i.nombre}`).join(', ') || 'Sin detalle',
-                formatoPeso(v.total_pagado || v.total)
-            ]),
-            theme: 'striped', headStyles: { fillColor: [16, 185, 129] },
-            columnStyles: { 2: { cellWidth: 80 } }
+            head: [['N°', 'Cliente', 'Detalle Productos', 'Tipo', 'Valor', 'Pago']],
+            body: rowsPedidos,
+            theme: 'striped',
+            headStyles: { fillColor: [100, 100, 100] },
+            styles: { fontSize: 8, cellPadding: 2 },
+            columnStyles: {
+                2: { cellWidth: 60 }, 
+                4: { halign: 'right' }
+            }
         });
 
-        pdf.save(`Reporte_Isakari_${data.fechaString}.pdf`);
+        pdf.save(`Reporte_Caja_Isakari_${data.fechaString}.pdf`);
     };
 
-    const cajasFiltradas = filtroFechaHistorial 
+    const cajasFiltradas = (filtroFechaHistorial 
         ? cajasAnteriores.filter(c => c.fechaString === filtroFechaHistorial)
-        : cajasAnteriores;
+        : cajasAnteriores) || [];
 
-    if (cargando) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-400 animate-pulse tracking-widest">Sincronizando Isakari...</div>;
+    if (cargando) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-400 animate-pulse text-[10px]">Sincronizando Isakari...</div>;
 
     return (
-        <div className="flex flex-col h-full bg-slate-100 p-6 font-sans overflow-hidden text-gray-800">
+        <div className="flex flex-col h-full bg-slate-100 p-2 md:p-4 font-sans overflow-hidden text-gray-800">
             
-            {/* TABS NAVEGACIÓN */}
-            <div className="flex justify-center mb-8">
-                <div className="bg-white rounded-full p-1.5 shadow-sm border border-slate-200 flex gap-1">
-                    <button onClick={() => setVista('actual')} className={`px-6 py-2.5 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${vista === 'actual' ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>
+            <div className="flex justify-center mb-4 flex-shrink-0">
+                <div className="bg-white rounded-full p-1 shadow-sm border border-slate-200 flex gap-1">
+                    <button onClick={() => setVista('actual')} className={`px-5 py-1.5 rounded-full text-[9px] font-black uppercase transition-all flex items-center gap-2 ${vista === 'actual' ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>
                         <i className="bi bi-cash-stack"></i> Caja Actual
                     </button>
-                    <button onClick={() => setVista('historial')} className={`px-6 py-2.5 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${vista === 'historial' ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>
+                    <button onClick={() => setVista('historial')} className={`px-5 py-1.5 rounded-full text-[9px] font-black uppercase transition-all flex items-center gap-2 ${vista === 'historial' ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>
                         <i className="bi bi-clock-history"></i> Historial
-                    </button>
-                    <button onClick={() => setVista('pendientes')} className={`px-6 py-2.5 rounded-full text-[10px] font-black uppercase transition-all flex items-center gap-2 ${vista === 'pendientes' ? 'bg-red-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}>
-                        <i className="bi bi-exclamation-triangle"></i> Sin Pagar
                     </button>
                 </div>
             </div>
 
-            {vista === 'actual' && (
-                <>
-                {!idCajaAbierta ? (
-                    <div className="flex-1 flex items-center justify-center animate-fade-in">
-                        <div className="bg-white rounded-[3.5rem] p-12 shadow-2xl border-2 border-slate-50 text-center max-w-md w-full">
-                            <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner"><i className="bi bi-door-open-fill text-4xl"></i></div>
-                            <h1 className="text-4xl font-black uppercase tracking-tighter text-slate-900 mb-2 leading-none">Abrir Turno</h1>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-10 text-center">Ingrese el fondo inicial para operar hoy.</p>
-                            <div className="space-y-6">
-                                <div className="text-left">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-4 tracking-widest">Monto Inicial</label>
-                                    <div className="flex items-center bg-slate-50 border-2 border-slate-100 rounded-[1.5rem] px-5 focus-within:border-red-500 transition-colors shadow-inner">
-                                        <span className="text-2xl font-black text-slate-300">$</span>
-                                        <input type="text" className="w-full p-4 bg-transparent outline-none font-black text-3xl text-slate-800" placeholder="0" value={montoAperturaInput} onChange={(e) => setMontoAperturaInput(e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, "."))} />
+            <div className="flex-1 overflow-hidden">
+                {vista === 'actual' && (
+                    !idCajaAbierta ? (
+                        <div className="h-full flex items-center justify-center animate-fade-in">
+                            <div className="bg-white rounded-2xl p-8 shadow-xl border-2 border-slate-50 text-center max-w-sm w-full">
+                                <h1 className="text-2xl font-black uppercase mb-4 tracking-tighter text-slate-900">Iniciar Caja</h1>
+                                <input type="text" className="w-full p-3 mb-4 bg-slate-50 border-2 border-slate-100 rounded-xl font-black text-2xl text-center outline-none focus:border-red-500" placeholder="$ 0" value={montoAperturaInput} onChange={(e) => setMontoAperturaInput(e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, "."))} />
+                                <button onClick={handleAbrirCaja} className="w-full py-4 bg-red-600 text-white rounded-xl font-black uppercase tracking-widest text-xs shadow-lg hover:bg-red-700">Abrir Caja</button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="h-full flex flex-col overflow-hidden animate-fade-in">
+                            <header className="flex items-center justify-between mb-3 flex-shrink-0">
+                                <div>
+                                    <h2 className="text-xl font-black text-slate-900 tracking-tighter uppercase leading-none m-0">Caja Isakari</h2>
+                                    <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1.5 mt-1">
+                                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> {fechaInicioCaja}
+                                    </span>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => handleExportarPDF()} className="bg-white border-2 border-slate-200 text-red-600 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase flex items-center gap-1.5 shadow-sm transition-colors hover:bg-slate-50"><i className="bi bi-file-earmark-pdf-fill"></i> REPORTE PDF</button>
+                                    <button onClick={handleCerrarCaja} className="bg-slate-900 text-white px-4 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-lg hover:bg-black transition-all">CERRAR TURNO</button>
+                                </div>
+                            </header>
+
+                            <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-4 pb-6">
+                                {ordenesNoPagadasHoy.length > 0 && (
+                                    <div className="bg-amber-100 border-l-4 border-amber-500 py-1 px-3 rounded flex items-center justify-between shadow-sm animate-pulse">
+                                        <span className="text-[10px] font-black text-amber-900 uppercase">
+                                            <i className="bi bi-exclamation-triangle-fill me-2"></i>
+                                            Pedidos Pendientes del {fechaInicioCaja} ({ordenesNoPagadasHoy.length})
+                                        </span>
+                                    </div>
+                                )}
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+                                    <div className="bg-slate-500 p-5 rounded-2xl shadow-lg text-white border border-slate-600">
+                                        <span className="text-[10px] font-black uppercase opacity-80 tracking-widest">Caja Inicial</span>
+                                        <div className="text-3xl font-black tracking-tighter mt-1">{formatoPeso(montoApertura)}</div>
+                                    </div>
+                                    <div className="bg-emerald-600 p-5 rounded-2xl shadow-xl text-white border border-emerald-700">
+                                        <span className="text-[10px] font-black uppercase opacity-80 tracking-widest">Ventas (Neto)</span>
+                                        <div className="text-3xl font-black tracking-tighter mt-1">{formatoPeso(totalVentasNetas)}</div>
+                                    </div>
+                                    <div className="bg-orange-600 p-5 rounded-2xl shadow-xl text-white border border-orange-700">
+                                        <span className="text-[10px] font-black uppercase opacity-80 tracking-widest">Envíos</span>
+                                        <div className="text-3xl font-black tracking-tighter mt-1">{formatoPeso(totalEnvios)}</div>
+                                    </div>
+                                    <div className="bg-rose-600 p-5 rounded-2xl shadow-xl text-white border border-rose-700">
+                                        <span className="text-[10px] font-black uppercase opacity-80 tracking-widest">Gastos</span>
+                                        <div className="text-3xl font-black tracking-tighter mt-1">{formatoPeso(totalGastos)}</div>
+                                    </div>
+                                    <div className="bg-slate-900 p-5 rounded-2xl shadow-2xl text-white border border-slate-800">
+                                        <span className="text-[10px] font-black uppercase opacity-80 text-emerald-400 tracking-widest">Utilidad</span>
+                                        <div className="text-3xl font-black tracking-tighter mt-1 text-emerald-400">{formatoPeso(gananciaReal)}</div>
                                     </div>
                                 </div>
-                                <button onClick={handleAbrirCaja} disabled={procesandoApertura} className="w-full py-6 bg-red-600 text-white rounded-[1.5rem] font-black uppercase tracking-widest shadow-xl shadow-red-100 hover:bg-red-700 active:scale-95 transition-all">
-                                    {procesandoApertura ? 'Abriendo...' : 'Iniciar Jornada'}
-                                </button>
+
+                                <div className="bg-slate-900 p-6 rounded-3xl shadow-2xl text-white border-2 border-emerald-500/30 flex flex-col items-center justify-center">
+                                    <span className="text-[11px] font-black uppercase opacity-80 text-emerald-300 tracking-[0.2em]">Total en Gaveta (Efectivo Físico)</span>
+                                    <div className="text-5xl font-black tracking-tighter mt-1">{formatoPeso(efectivoEnCajon)}</div>
+                                    <p className="text-[8px] font-bold text-slate-400 uppercase mt-2 tracking-[0.3em]">Apertura + Efectivo - Gastos</p>
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col items-center">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase">Efectivo Turno</span>
+                                        <div className="text-lg font-black text-slate-800">{formatoPeso(efectivo)}</div>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col items-center">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase">Transferencia</span>
+                                        <div className="text-lg font-black text-slate-800">{formatoPeso(transferencia)}</div>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col items-center">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase">Tarjeta</span>
+                                        <div className="text-lg font-black text-slate-800">{formatoPeso(tarjeta)}</div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden min-h-[300px]">
+                                        <div className="p-3 border-b bg-gray-50 flex justify-between items-center text-[10px] font-black uppercase text-slate-500 tracking-wider">Movimientos del Turno ({fechaInicioCaja}) <span className="bg-slate-900 text-white text-[9px] px-2 py-0.5 rounded-full">{listaVentas.length}</span></div>
+                                        <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+                                            {listaVentas.map(v => (
+                                                <div key={v.id} className="flex justify-between items-center p-3 bg-slate-50/50 rounded-xl border border-slate-100 hover:bg-white transition-colors group">
+                                                    <div className="max-w-[60%] min-w-0">
+                                                        <div className="text-[11px] font-black uppercase truncate leading-none mb-1">#{v.numero_pedido} {v.nombre_cliente}</div>
+                                                        <div className="text-[8px] text-emerald-500 font-black uppercase tracking-widest">{v.metodo_pago}</div>
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="text-[12px] font-black text-slate-900">{formatoPeso(v.total)}</div>
+                                                        <button 
+                                                            onClick={() => handleEliminarPedido(v.id, v.numero_pedido)}
+                                                            className="w-8 h-8 rounded-lg bg-red-50 text-red-500 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-red-600 hover:text-white"
+                                                            title="Eliminar Pedido"
+                                                        >
+                                                            <i className="bi bi-trash3-fill text-[10px]"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden min-h-[300px]">
+                                        <div className="p-3 border-b bg-gray-50 flex justify-between items-center text-[10px] font-black uppercase text-slate-500 tracking-wider">Gastos ({fechaInicioCaja}) <span className="bg-rose-100 text-rose-600 text-[9px] px-2 py-0.5 rounded-full">{listaGastos.length}</span></div>
+                                        <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+                                            {listaGastos.map(g => (
+                                                <div key={g.id} className="flex justify-between items-center p-3 bg-rose-50/30 rounded-xl border border-rose-100 hover:bg-white transition-colors">
+                                                    <div className="text-[10px] font-black uppercase text-slate-700 leading-tight truncate">{g.descripcion}</div>
+                                                    <div className="text-[12px] font-black text-rose-600">-{formatoPeso(g.monto)}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                ) : (
-                    <div className="flex flex-col h-full overflow-hidden animate-fade-in">
-                        <header className="flex items-center justify-between mb-6">
-                            <div><h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase leading-none">Caja Isakari</h2><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 flex items-center gap-2"><span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>Sesión activa: {fechaInicioCaja}</span></div>
-                            <div className="flex gap-2">
-                                <button onClick={() => handleExportarPDF()} className="bg-white border-2 border-slate-200 text-red-600 px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-red-50 transition-all flex items-center gap-2 shadow-sm"><i className="bi bi-file-earmark-pdf-fill"></i> PDF DETALLADO</button>
-                                <button onClick={handleCerrarCaja} className="bg-slate-900 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg hover:bg-black transition-all">CERRAR TURNO</button>
+                    )
+                )}
+
+                {vista === 'historial' && (
+                    <div className="h-full flex flex-col overflow-hidden animate-fade-in">
+                        <header className="flex justify-between items-center mb-6 flex-shrink-0">
+                            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter leading-none m-0">Historial</h2>
+                            <div className="flex items-center gap-3 bg-white rounded-2xl p-2 border border-slate-200 shadow-sm focus-within:border-red-500 transition-all">
+                                <i className="bi bi-search text-slate-400 ml-2"></i>
+                                <input type="date" className="outline-none text-[10px] font-black uppercase text-slate-800 bg-transparent px-2" value={filtroFechaHistorial} onChange={(e) => setFiltroFechaHistorial(e.target.value)} />
+                                {filtroFechaHistorial && <button onClick={() => setFiltroFechaHistorial('')} className="p-1 text-slate-300 hover:text-red-600 transition-colors"><i className="bi bi-x-circle-fill"></i></button>}
                             </div>
                         </header>
-
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                            <div className="bg-emerald-600 p-5 rounded-[2rem] shadow-xl text-white border border-emerald-700"><span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Ventas Netas</span><div className="text-2xl font-black tracking-tighter mt-1">{formatoPeso(totalVentasNetas)}</div></div>
-                            <div className="bg-orange-600 p-5 rounded-[2rem] shadow-xl text-white border border-orange-700"><span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Envíos</span><div className="text-2xl font-black tracking-tighter mt-1">{formatoPeso(totalEnvios)}</div></div>
-                            <div className="bg-rose-600 p-5 rounded-[2rem] shadow-xl text-white border border-rose-700"><span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Gastos</span><div className="text-2xl font-black tracking-tighter mt-1">{formatoPeso(totalGastos)}</div></div>
-                            <div className="bg-slate-900 p-5 rounded-[2rem] shadow-2xl text-white border border-slate-800"><span className="text-[9px] font-black uppercase opacity-70 tracking-widest">Utilidad</span><div className="text-2xl font-black tracking-tighter">{formatoPeso(gananciaReal)}</div></div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                            <div className="bg-white p-5 rounded-[2rem] shadow-sm border-2 border-slate-50 flex items-center justify-between"><div><span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Efectivo</span><div className="text-xl font-black text-slate-800">{formatoPeso(efectivo)}</div></div><i className="bi bi-wallet2 text-emerald-600 opacity-30 text-2xl"></i></div>
-                            <div className="bg-white p-5 rounded-[2rem] shadow-sm border-2 border-slate-50 flex items-center justify-between"><div><span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Transferencia</span><div className="text-xl font-black text-slate-800">{formatoPeso(transferencia)}</div></div><i className="bi bi-bank text-blue-600 opacity-30 text-2xl"></i></div>
-                            <div className="bg-white p-5 rounded-[2rem] shadow-sm border-2 border-slate-50 flex items-center justify-between"><div><span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Tarjeta</span><div className="text-xl font-black text-slate-800">{formatoPeso(tarjeta)}</div></div><i className="bi bi-credit-card text-indigo-600 opacity-30 text-2xl"></i></div>
-                        </div>
-
-                        <div className="bg-slate-900 text-white rounded-[2.5rem] p-6 shadow-2xl flex items-center justify-center mb-6">
-                            <div className="text-center"><small className="block text-[8px] font-black opacity-50 uppercase tracking-widest mb-1">TOTAL EN GAVETA (FISICO)</small><span className="font-black text-3xl tracking-tighter">{formatoPeso(efectivoEnCajon)}</span></div>
-                        </div>
-
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 overflow-hidden">
-                            <div className="bg-white rounded-[2rem] border-2 border-slate-200 flex flex-col overflow-hidden">
-                                <div className="p-4 border-b bg-gray-50 flex justify-between items-center text-[10px] font-black uppercase text-slate-500">Ventas Turno <span className="bg-slate-900 text-white text-[9px] px-3 py-1 rounded-full">{listaVentas.length}</span></div>
-                                <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-                                    {listaVentas.map(v => (
-                                        <div key={v.id} className="flex justify-between items-center p-3 bg-slate-50/50 rounded-xl border border-slate-100">
-                                            <div className="max-w-[70%"><div className="text-[11px] font-black uppercase leading-none mb-1">#{v.numero_pedido} {v.nombre_cliente}</div><div className="text-[8px] text-emerald-500 font-black uppercase">{v.metodo_pago}</div></div>
-                                            <div className="text-[12px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
+                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3 pb-10">
+                            {cajasFiltradas.map(c => (
+                                <div key={c.id || Math.random()} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex justify-between items-center hover:shadow-md transition-all">
+                                    <div className="flex items-center gap-6 flex-1 min-w-0 text-[10px] font-black uppercase">
+                                        <div className="w-12 h-12 bg-slate-900 text-white rounded-2xl flex items-center justify-center text-xl shadow-lg flex-shrink-0"><i className="bi bi-archive"></i></div>
+                                        <div className="truncate">
+                                            <div className="text-lg font-black text-slate-900 tracking-tighter">{String(c.fechaString || 'S/F')}</div>
+                                            <div className="text-[8px] text-slate-400 font-bold">{String(c.usuario_email || 'Sin usuario')}</div>
                                         </div>
-                                    ))}
+                                    </div>
+                                    <div className="flex items-center gap-4 flex-shrink-0">
+                                        <div className="text-right">
+                                            <div className="text-[8px] font-black text-slate-400 tracking-widest uppercase">VENTAS (NETO)</div>
+                                            <div className="font-black text-emerald-600 text-sm">{formatoPeso(Number(c.total_ventas || 0) - Number(c.total_envios || 0))}</div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-[8px] font-black text-slate-400 tracking-widest uppercase">GAVETA</div>
+                                            <div className="font-black text-slate-900 text-sm">{formatoPeso(c.monto_cierre_sistema)}</div>
+                                        </div>
+                                        <div className="flex gap-2 ml-4">
+                                            <button 
+                                                onClick={() => handleReabrirCaja(c)} 
+                                                className="w-10 h-10 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center hover:bg-amber-600 hover:text-white transition-all shadow-sm" 
+                                                title="Re-abrir Caja para corrección"
+                                            >
+                                                <i className="bi bi-unlock-fill"></i>
+                                            </button>
+                                            
+                                            <button 
+                                                onClick={() => handleExportarPDF(c)} 
+                                                className="w-10 h-10 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-sm" 
+                                                title="Descargar PDF"
+                                            >
+                                                <i className="bi bi-file-earmark-pdf-fill"></i>
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="bg-white rounded-[2rem] border-2 border-slate-200 flex flex-col overflow-hidden">
-                                <div className="p-4 border-b bg-gray-50 flex justify-between items-center text-[10px] font-black uppercase text-slate-500">Gastos Turno <span className="bg-rose-100 text-rose-600 text-[9px] px-3 py-1 rounded-full">{listaGastos.length}</span></div>
-                                <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-                                    {listaGastos.map(g => (
-                                        <div key={g.id} className="flex justify-between items-center p-3 bg-rose-50/30 rounded-xl border border-rose-100"><div className="text-[11px] font-black uppercase text-slate-700">{g.descripcion}</div><div className="text-[12px] font-black text-rose-600">-{formatoPeso(g.monto)}</div></div>
-                                    ))}
-                                </div>
-                            </div>
+                            ))}
                         </div>
                     </div>
                 )}
-                </>
-            )}
+            </div>
 
-            {vista === 'historial' && (
-                <div className="flex-1 flex flex-col overflow-hidden animate-fade-in">
-                    <header className="flex justify-between items-center mb-6">
-                        <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter leading-none">Buscar Turnos</h2>
-                        <div className="flex items-center gap-3 bg-white rounded-2xl p-2 border-2 border-slate-200 shadow-sm transition-all focus-within:border-red-500">
-                            <i className="bi bi-search text-slate-400 ml-2"></i>
-                            <input type="date" className="outline-none text-[11px] font-black uppercase text-slate-800 bg-transparent px-2" value={filtroFechaHistorial} onChange={(e) => setFiltroFechaHistorial(e.target.value)} />
-                            {filtroFechaHistorial && <button onClick={() => setFiltroFechaHistorial('')} className="p-1 text-slate-300 hover:text-red-600 transition-colors"><i className="bi bi-x-circle-fill"></i></button>}
-                        </div>
-                    </header>
-                    <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
-                        {cajasFiltradas.map(c => (
-                            <div key={c.id} className="bg-white rounded-[2.5rem] p-6 shadow-sm border-2 border-white flex justify-between items-center hover:border-slate-200 transition-all hover:shadow-md">
-                                <div className="flex items-center gap-6"><div className="w-14 h-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center text-xl shadow-lg"><i className="bi bi-archive"></i></div><div><div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Cierre</div><div className="text-2xl font-black text-slate-900 uppercase tracking-tighter">{c.fechaString}</div><div className="text-[9px] font-bold text-slate-400 uppercase">Por: {c.usuario_email}</div></div></div>
-                                <div className="flex items-center gap-8">
-                                    <div className="grid grid-cols-2 gap-x-10 gap-y-1 text-right">
-                                        <div><small className="block text-[8px] font-black text-slate-400 uppercase">Ventas</small><span className="font-black text-emerald-600">{formatoPeso(c.total_ventas)}</span></div>
-                                        <div><small className="block text-[8px] font-black text-slate-400 uppercase">Gastos</small><span className="font-black text-rose-600">{formatoPeso(c.total_gastos)}</span></div>
-                                        <div className="col-span-2 border-t border-slate-100 pt-2"><small className="block text-[8px] font-black text-slate-400 uppercase">Final</small><span className="font-black text-slate-900 text-lg">{formatoPeso(c.monto_cierre_sistema)}</span></div>
-                                    </div>
-                                    <button onClick={() => handleExportarPDF(c)} className="w-12 h-12 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-sm" title="Descargar PDF"><i className="bi bi-file-earmark-pdf-fill text-xl"></i></button>
-                                </div>
-                            </div>
-                        ))}
-                        {cajasFiltradas.length === 0 && <div className="text-center py-20 text-slate-300 font-black uppercase text-xs tracking-widest opacity-50 flex flex-col items-center gap-4"><i className="bi bi-search text-4xl"></i> No se encontraron registros</div>}
-                    </div>
-                </div>
-            )}
-
-            {vista === 'pendientes' && (
-                <div className="flex-1 flex flex-col overflow-hidden animate-fade-in">
-                    <header className="flex justify-between items-end mb-6"><h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter m-0 leading-none">Órdenes sin Cobrar</h2><span className="bg-red-100 text-red-600 px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm">{ordenesNoPagadas.length} PENDIENTES</span></header>
-                    <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
-                        {ordenesNoPagadas.map(o => (
-                            <div key={o.id} className="bg-white rounded-[2rem] p-5 shadow-sm border-2 border-red-100 flex justify-between items-center transition-all hover:shadow-md">
-                                <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-2xl bg-red-500 text-white flex items-center justify-center font-black text-lg shadow-lg">#{o.numero_pedido}</div><div><div className="text-[13px] font-black uppercase text-slate-900">{o.nombre_cliente} • {o.fechaString}</div><div className="flex gap-2 mt-1.5"><span className="text-[8px] font-black px-3 py-1 rounded-full uppercase border bg-rose-50 border-rose-200 text-red-600 animate-pulse">SIN COBRAR</span><span className={`text-[8px] font-black px-3 py-1 rounded-full uppercase border ${String(o.estado).toLowerCase() === 'entregado' ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>{o.estado === 'entregado' ? 'ENTREGADO' : 'PENDIENTE'}</span></div></div></div>
-                                <div className="text-right"><div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">{o.tipo_entrega}</div><div className="text-2xl font-black text-slate-900 tracking-tighter">{formatoPeso(o.total)}</div></div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; } .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; } @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+            <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; } .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; } @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } } group:hover .group-hover\\:opacity-100 { opacity: 1; }`}</style>
         </div>
     );
 }

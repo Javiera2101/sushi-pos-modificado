@@ -1,7 +1,7 @@
 {
   "name": "isakari-sushi",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "main": "main.js",
   "author": "IsaKari Sushi",
   "description": "Sistema de Punto de Venta",

@@ -1,46 +1,69 @@
 import React from 'react';
+import './css/Ticket.css';
 
-const Ticket = ({ orden = [], total = 0, numeroPedido = '...', tipoEntrega = 'LOCAL', fecha = '', cliente = '', hora = '', descripcion = '' }) => {
-  const formatoPeso = (valor) => (Number(valor) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP' });
-  const totalNum = parseInt(total || 0);
-
+const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, costoDespacho, descripcion }) => {
   return (
-    <div className="ticket-container" style={{ padding: '10px', fontFamily: 'monospace', width: '280px', backgroundColor: 'white', color: 'black', lineHeight: '1.2' }}>
-      <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-        <h2 style={{ margin: '0', fontSize: '18px' }}>ISAKARI SUSHI</h2>
-        <div style={{ borderTop: '1px dashed black', margin: '10px 0' }}></div>
-        <h3 style={{ margin: '5px 0' }}>Pedido #{String(numeroPedido)}</h3>
-        {cliente && <p style={{ margin: '0', fontWeight: 'bold', textTransform: 'uppercase' }}>{String(cliente)}</p>}
-        <p style={{ margin: '0' }}>{fecha} - {hora}</p>
-        <div style={{ borderTop: '1px dashed black', margin: '10px 0' }}></div>
+    <div className="ticket-container">
+      <div className="text-center mb-2 border-bottom pb-2">
+        <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>SUSHIPHONE</h2>
+        <p style={{ margin: 0, fontSize: '12px' }}>Pedido N°: {numeroPedido}</p>
+        <p style={{ margin: 0, fontSize: '11px' }}>{fecha} - {hora}</p>
       </div>
 
-      {orden.map((item, i) => (
-        <div key={i} style={{ marginBottom: '8px', fontSize: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ flex: '1' }}>{item.cantidad} x {item.nombre}</span>
-            <span>{formatoPeso(item.precio * item.cantidad)}</span>
-          </div>
-          {item.observacion && (
-            <div style={{ backgroundColor: 'black', color: 'white', padding: '2px', textAlign: 'center', margin: '4px 0', fontWeight: 'bold' }}>
-              ★ {item.observacion} ★
+      <div className="mb-2" style={{ fontSize: '13px' }}>
+        <strong>CLIENTE:</strong> {cliente?.toUpperCase() || 'PÚBLICO GENERAL'}<br />
+        {telefono && <span><strong>FONO:</strong> {telefono}</span>}
+      </div>
+
+      {tipoEntrega === 'REPARTO' && (
+        <div className="ticket-address-container">
+          <span className="ticket-address-label">Dirección de Despacho:</span>
+          <span className="ticket-address-text">
+            {direccion}
+          </span>
+          {descripcion && (
+            <div style={{ marginTop: '5px', fontSize: '11px', borderTop: '1px dashed #ccc', paddingTop: '3px' }}>
+              <strong>NOTAS:</strong> {descripcion}
             </div>
           )}
         </div>
-      ))}
+      )}
 
-      <div style={{ borderTop: '1px dashed black', paddingTop: '5px', marginTop: '10px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 'bold' }}>
-          <span>TOTAL</span>
-          <span>{formatoPeso(totalNum)}</span>
+      <table className="ticket-table">
+        <thead>
+          <tr style={{ borderBottom: '1px solid black' }}>
+            <th align="left">CANT</th>
+            <th align="left">ITEM</th>
+            <th align="right">SUBT</th>
+          </tr>
+        </thead>
+        <tbody>
+          {orden?.map((item, idx) => (
+            <tr key={idx}>
+              <td valign="top">{item.cantidad}</td>
+              <td valign="top">
+                {item.nombre}
+                {item.observacion && <div style={{ fontSize: '10px', fontStyle: 'italic' }}>- {item.observacion}</div>}
+              </td>
+              <td align="right" valign="top">${(item.precio * item.cantidad).toLocaleString('es-CL')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="ticket-total-section">
+        {costoDespacho > 0 && (
+          <div style={{ fontSize: '12px' }}>Envío: ${parseInt(costoDespacho).toLocaleString('es-CL')}</div>
+        )}
+        <div className="ticket-total-value">
+          TOTAL: ${total?.toLocaleString('es-CL')}
         </div>
       </div>
 
-      {descripcion && (
-        <div style={{ marginTop: '10px', borderTop: '1px solid black', paddingTop: '5px' }}>
-          <p style={{ margin: '0', fontSize: '11px', fontWeight: 'bold' }}>OBS: {descripcion.toUpperCase()}</p>
-        </div>
-      )}
+      <div className="text-center mt-3" style={{ fontSize: '11px' }}>
+        ¡Gracias por su compra!<br />
+        www.sushiphone.cl
+      </div>
     </div>
   );
 };
