@@ -1,30 +1,32 @@
-/**
- * Obtiene la fecha actual en formato local YYYY-MM-DD.
- * Soluciona el problema de cambio de día adelantado por zona horaria UTC.
- */
-export const getTodayDateString = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+export const formatDate = (date) => {
+    if (!date) return '';
+    const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
+    return d.toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+    });
+};
+
+export const formatDateTime = (date) => {
+    if (!date) return '';
+    const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
+    return d.toLocaleString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
 };
 
 /**
- * Obtiene la hora actual en formato HH:MM local
+ * Obtiene la fecha en formato YYYY-MM-DD respetando la zona horaria local.
+ * Esto evita el desfase de horas al usar toISOString().
  */
-export const getCurrentTime = () => {
-  const date = new Date();
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
-};
-
-/**
- * Formatea una fecha YYYY-MM-DD a DD/MM/YYYY para visualización
- */
-export const formatDisplayDate = (dateString) => {
-  if (!dateString) return '';
-  const [year, month, day] = dateString.split('-');
-  return `${day}/${month}/${year}`;
+export const getLocalISODate = (date = new Date()) => {
+    const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
+    const offset = d.getTimezoneOffset();
+    const localDate = new Date(d.getTime() - (offset * 60 * 1000));
+    return localDate.toISOString().split('T')[0];
 };

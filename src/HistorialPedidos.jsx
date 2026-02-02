@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
   query, 
-  where, 
   onSnapshot, 
   doc, 
   updateDoc, 
@@ -13,6 +12,7 @@ import {
 import { db } from './firebase.js';
 import { useUi } from './context/UiContext.jsx';
 import Ticket from './Ticket.jsx'; 
+import { getLocalISODate } from './utils/dateUtils.js';
 
 const ipcRenderer = (function() {
   try {
@@ -26,12 +26,11 @@ const ipcRenderer = (function() {
 
 export default function HistorialPedidos({ onEditar, user }) {
   const { notificar } = useUi();
-  const [pedidos, setPedidos] = useState([]);
+  const [todosLosPedidos, setTodosLosPedidos] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState('todos');
-  const [fechaFiltro, setFechaFiltro] = useState(new Date().toISOString().split('T')[0]);
+  const [fechaFiltro, setFechaFiltro] = useState(getLocalISODate());
   
-  // Estados para el Cobro
   const [pedidoParaCobrar, setPedidoParaCobrar] = useState(null);
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [modoPago, setModoPago] = useState('unico'); 
@@ -49,10 +48,14 @@ export default function HistorialPedidos({ onEditar, user }) {
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
+  // 1. Carga de datos cumpliendo la Regla 2 (Fetch simple y filtrar en memoria)
   useEffect(() => {
     if (!user) return;
     setCargando(true);
-    const q = query(collection(db, colOrdenes), where("fechaString", "==", fechaFiltro));
+    
+    // Traemos la colección completa para filtrar localmente por fecha real
+    const q = query(collection(db, colOrdenes));
+    
     const unsubscribe = onSnapshot(q, (snap) => {
       const docs = snap.docs.map(d => {
         const data = d.data();
@@ -63,15 +66,27 @@ export default function HistorialPedidos({ onEditar, user }) {
           metodo_pago: data.metodo_pago || data.medioPago || "N/A"
         };
       });
-      docs.sort((a, b) => (b.numero_pedido || 0) - (a.numero_pedido || 0));
-      setPedidos(docs);
+      setTodosLosPedidos(docs);
       setCargando(false);
     }, (err) => {
       console.error("Error en historial:", err);
       setCargando(false);
     });
     return () => unsubscribe();
-  }, [user, colOrdenes, fechaFiltro]);
+  }, [user, colOrdenes]);
+
+  // 2. Filtrado y ordenado en memoria para asegurar fechas locales correctas
+  const pedidosFiltradosYOrdenados = useMemo(() => {
+    return todosLosPedidos
+      .filter(p => {
+        // CORRECCIÓN CLAVE: Calculamos el día local desde el Timestamp, no desde el string guardado
+        const diaPedido = getLocalISODate(p.fecha);
+        const coincideFecha = diaPedido === fechaFiltro;
+        const coincideEstado = filtroEstado === 'todos' || String(p.estado).toLowerCase() === filtroEstado.toLowerCase();
+        return coincideFecha && coincideEstado;
+      })
+      .sort((a, b) => (Number(b.numero_pedido) || 0) - (Number(a.numero_pedido) || 0));
+  }, [todosLosPedidos, fechaFiltro, filtroEstado]);
 
   const ejecutarImpresionAutomatica = (pedido) => {
     notificar(`Imprimiendo ticket orden #${pedido.numero_pedido}...`, "success");
@@ -86,7 +101,8 @@ export default function HistorialPedidos({ onEditar, user }) {
             direccion: pedido.direccion,
             telefono: pedido.telefono,
             descripcion: pedido.descripcion,
-            fecha: pedido.fechaString || new Date().toLocaleDateString('es-CL'),
+            // Usamos la fecha real recalculada
+            fecha: getLocalISODate(pedido.fecha).split('-').reverse().join('/'),
             descuento: pedido.descuento || 0
         });
     } else {
@@ -120,7 +136,7 @@ export default function HistorialPedidos({ onEditar, user }) {
   const handleEliminarPedido = async (pedido) => {
     if (!window.confirm(`¿ESTÁS SEGURO? Eliminarás permanentemente el pedido #${pedido.numero_pedido} de ${pedido.nombre_cliente}.`)) return;
     try {
-      deleteDoc(doc(db, colOrdenes, pedido.id)).catch(err => console.error("Error delete offline:", err));
+      await deleteDoc(doc(db, colOrdenes, pedido.id));
       notificar(`Pedido #${pedido.numero_pedido} eliminado`, "success");
     } catch (e) {
       console.error(e);
@@ -139,28 +155,26 @@ export default function HistorialPedidos({ onEditar, user }) {
       descuento: 0,
       total_pagado: 0,
       fecha_pago: null
-    }).catch(err => console.error("Error update anular pago:", err));
-
-    addDoc(collection(db, colMovimientos), {
-      tipo: 'egreso',
-      categoria: 'ANULACION',
-      monto: pedidoParaCobrar.total_pagado || pedidoParaCobrar.total,
-      descripcion: `ANULACIÓN PAGO PEDIDO #${pedidoParaCobrar.numero_pedido}`,
-      metodo: pedidoParaCobrar.metodo_pago || 'Otro',
-      fecha: Timestamp.now(),
-      usuario_id: user.uid,
-      pedido_id: pedidoParaCobrar.id
-    }).catch(err => console.error("Error add movimiento anulacion:", err));
-
-    setPedidoParaCobrar(null);
-    setAplicarDescuento(false);
-    notificar(`Pago de pedido #${pedidoParaCobrar.numero_pedido} anulado`, "success");
+    }).then(() => {
+      addDoc(collection(db, colMovimientos), {
+        tipo: 'egreso',
+        categoria: 'ANULACION',
+        monto: pedidoParaCobrar.total_pagado || pedidoParaCobrar.total,
+        descripcion: `ANULACIÓN PAGO PEDIDO #${pedidoParaCobrar.numero_pedido}`,
+        metodo: pedidoParaCobrar.metodo_pago || 'Otro',
+        fecha: Timestamp.now(),
+        usuario_id: user.uid,
+        pedido_id: pedidoParaCobrar.id
+      });
+      setPedidoParaCobrar(null);
+      setAplicarDescuento(false);
+      notificar(`Pago anulado`, "success");
+    }).catch(err => console.error(err));
   };
 
   const confirmarPago = () => {
     if (!pedidoParaCobrar) return;
     const p = pedidoParaCobrar;
-    
     const montoDescuento = aplicarDescuento ? Math.round(p.total * 0.1) : 0;
     const totalACobrar = p.total - montoDescuento;
 
@@ -173,13 +187,12 @@ export default function HistorialPedidos({ onEditar, user }) {
     const totalIngresado = metodosFinales.reduce((acc, item) => acc + item.monto, 0);
     
     if (totalIngresado < totalACobrar) {
-      notificar(`Faltan ${formatPeso(totalACobrar - totalIngresado)} para completar el pago`, "error");
+      notificar(`Faltan ${formatPeso(totalACobrar - totalIngresado)}`, "error");
       return;
     }
 
     setProcesandoPago(true);
     
-    // 1. ACTUALIZAR ORDEN (Modo Offline)
     updateDoc(doc(db, colOrdenes, p.id), {
       estado_pago: 'Pagado',
       metodo_pago: modoPago === 'unico' ? metodoUnico : 'Mixto',
@@ -187,26 +200,28 @@ export default function HistorialPedidos({ onEditar, user }) {
       descuento: montoDescuento,
       total_pagado: totalIngresado,
       fecha_pago: Timestamp.now()
-    }).catch(err => console.error("Error update cobrar pago:", err));
-
-    // 2. REGISTRAR MOVIMIENTOS
-    metodosFinales.forEach(item => {
-      addDoc(collection(db, colMovimientos), {
-        tipo: 'ingreso',
-        categoria: 'VENTA',
-        monto: item.monto,
-        descripcion: `VENTA PEDIDO #${p.numero_pedido}${aplicarDescuento ? ' (DESC 10%)' : ''}`,
-        metodo: item.metodo,
-        fecha: Timestamp.now(),
-        usuario_id: user.uid,
-        pedido_id: p.id
-      }).catch(err => console.error("Error add movimiento venta:", err));
+    }).then(() => {
+      metodosFinales.forEach(item => {
+        addDoc(collection(db, colMovimientos), {
+          tipo: 'ingreso',
+          categoria: 'VENTA',
+          monto: item.monto,
+          descripcion: `VENTA PEDIDO #${p.numero_pedido}${aplicarDescuento ? ' (DESC 10%)' : ''}`,
+          metodo: item.metodo,
+          fecha: Timestamp.now(),
+          usuario_id: user.uid,
+          pedido_id: p.id
+        });
+      });
+      notificar(`¡Pago registrado!`, "success");
+      setPedidoParaCobrar(null);
+      setAplicarDescuento(false);
+      setProcesandoPago(false);
+    }).catch(err => {
+      console.error(err);
+      notificar("Error al registrar pago", "error");
+      setProcesandoPago(false);
     });
-
-    notificar(`¡Pago de pedido #${p.numero_pedido} registrado!`, "success");
-    setPedidoParaCobrar(null);
-    setAplicarDescuento(false);
-    setProcesandoPago(false);
   };
 
   return (
@@ -246,9 +261,10 @@ export default function HistorialPedidos({ onEditar, user }) {
         <div className="py-20 text-center font-black text-slate-300 animate-pulse uppercase tracking-widest text-xs">Cargando datos...</div>
       ) : (
         <div className="grid gap-4 pb-32">
-          {pedidos
-            .filter(p => filtroEstado === 'todos' || String(p.estado).toLowerCase() === filtroEstado.toLowerCase())
-            .map(pedido => {
+          {pedidosFiltradosYOrdenados.length === 0 ? (
+            <div className="py-20 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">No hay pedidos para este día</div>
+          ) : (
+            pedidosFiltradosYOrdenados.map(pedido => {
               const isPaid = String(pedido.estado_pago || '').toLowerCase() === 'pagado';
               const isDelivered = String(pedido.estado).toLowerCase() === 'entregado';
               
@@ -265,7 +281,9 @@ export default function HistorialPedidos({ onEditar, user }) {
                               {pedido.estado}
                           </span>
                       </div>
-                      <p className="text-[10px] text-slate-500 font-bold uppercase m-0 mt-1">{pedido.tipo_entrega} • {pedido.hora_pedido} • {pedido.fechaString}</p>
+                      <p className="text-[10px] text-slate-500 font-bold uppercase m-0 mt-1">
+                        {pedido.tipo_entrega} • {pedido.hora_pedido} • {getLocalISODate(pedido.fecha).split('-').reverse().join('/')}
+                      </p>
                       
                       <div className="mt-3 space-y-1 bg-slate-50 p-3 rounded-2xl border border-slate-100 max-w-md">
                         {pedido.items?.map((item, idx) => (
@@ -292,7 +310,6 @@ export default function HistorialPedidos({ onEditar, user }) {
                     <div className="flex gap-2">
                       <button onClick={() => ejecutarImpresionAutomatica(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Imprimir"><i className="bi bi-printer"></i></button>
                       <button onClick={() => onEditar(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil"></i></button>
-                      
                       <button onClick={() => handleEliminarPedido(pedido)} className="w-11 h-11 rounded-xl bg-red-50 text-red-500 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm"><i className="bi bi-trash3-fill"></i></button>
 
                       <button 
@@ -313,10 +330,12 @@ export default function HistorialPedidos({ onEditar, user }) {
                   </div>
                 </div>
               );
-            })}
+            })
+          )}
         </div>
       )}
 
+      {/* Modal de Cobro */}
       {pedidoParaCobrar && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[9999] flex items-center justify-center p-4">
           <div className="bg-white rounded-[3rem] shadow-2xl p-10 w-full max-w-md border border-white scale-in" onClick={e => e.stopPropagation()}>
@@ -419,7 +438,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                 total={pedidoActivoParaImprimir.total_pagado || pedidoActivoParaImprimir.total} 
                 numeroPedido={pedidoActivoParaImprimir.numero_pedido} 
                 tipoEntrega={pedidoActivoParaImprimir.tipo_entrega} 
-                fecha={pedidoActivoParaImprimir.fechaString} 
+                fecha={getLocalISODate(pedidoActivoParaImprimir.fecha)} 
                 hora={pedidoActivoParaImprimir.hora_pedido} 
                 cliente={pedidoActivoParaImprimir.nombre_cliente} 
                 direccion={pedidoActivoParaImprimir.direccion}
