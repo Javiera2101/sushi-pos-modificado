@@ -9,7 +9,11 @@ import {
   Timestamp, 
   query, 
   where, 
-  onSnapshot 
+  onSnapshot,
+  getDocs,
+  orderBy,
+  limit,
+  enableIndexedDbPersistence
 } from 'firebase/firestore';
 import { 
   getAuth, 
@@ -27,7 +31,18 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 const auth = getAuth(app);
 
-// --- DETECCIÓN DE ELECTRON (Para impresión directa si existe) ---
+// Habilitar persistencia local para ahorrar lecturas (Caché en disco)
+try {
+    enableIndexedDbPersistence(db).catch((err) => {
+        if (err.code === 'failed-precondition') {
+            console.warn('La persistencia falló (múltiples pestañas abiertas)');
+        } else if (err.code === 'unimplemented') {
+            console.warn('El navegador no soporta persistencia');
+        }
+    });
+} catch (e) {}
+
+// --- DETECCIÓN DE ELECTRON ---
 const ipcRenderer = (function() {
   try {
     if (typeof window !== 'undefined' && window.require) {
@@ -38,12 +53,10 @@ const ipcRenderer = (function() {
   return null;
 })();
 
-// --- UTILIDADES DE FECHA LOCAL (CHILE) - CORREGIDO PARA EVITAR SALTO DE DÍA ---
+// --- UTILIDADES DE FECHA LOCAL (CHILE) ---
 const getLocalISODate = (dateInput) => {
   const d = dateInput ? (dateInput instanceof Date ? dateInput : (dateInput?.toDate ? dateInput.toDate() : new Date(dateInput))) : new Date();
-  
-  // Usamos Intl para asegurar que el formato YYYY-MM-DD se base siempre en Santiago
-  return new Intl.DateTimeFormat('en-CA', {
+  return new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'America/Santiago',
     year: 'numeric',
     month: '2-digit',
@@ -52,8 +65,7 @@ const getLocalISODate = (dateInput) => {
 };
 
 // --- COMPONENTE TICKET ---
-const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, descuento }) => {
-    // Formateamos la fecha para mostrarla amigablemente DD/MM/YYYY
+const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho }) => {
     const fechaChile = fecha && fecha.includes('-') ? fecha.split('-').reverse().join('/') : fecha;
 
     return (
@@ -65,8 +77,12 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                 <div>FECHA: {fechaChile} {hora}</div>
                 <div className="uppercase">CLIENTE: {cliente}</div>
                 <div className="uppercase font-bold">TIPO: {tipoEntrega}</div>
-                {telefono && <div>TEL: {telefono}</div>}
-                {direccion && <div className="uppercase">DIR: {direccion}</div>}
+                {tipoEntrega === 'REPARTO' && (
+                    <>
+                        {telefono && <div>TEL: {telefono}</div>}
+                        {direccion && <div className="uppercase">DIR: {direccion}</div>}
+                    </>
+                )}
             </div>
             <div className="border-b border-dashed border-gray-400 mb-2"></div>
             <table className="w-full mb-2">
@@ -76,19 +92,14 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                             <td className="pr-1 font-bold">{item.cantidad}x</td>
                             <td className="w-full uppercase">
                                 <div className="font-bold">{item.nombre}</div>
-                                {/* NOTA INDIVIDUAL POR PRODUCTO */}
-                                {item.observacion && (
-                                    <div className="text-[8px] italic lowercase leading-none mt-0.5 text-gray-600">
-                                        ↳ {item.observacion}
-                                    </div>
-                                )}
+                                {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600">↳ {item.observacion}</div>}
                             </td>
                             <td className="text-right whitespace-nowrap pl-1">
                                 ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString()}
                             </td>
                         </tr>
                     ))}
-                    {Number(costoDespacho) > 0 && (
+                    {tipoEntrega === 'REPARTO' && Number(costoDespacho) > 0 && (
                         <tr className="border-t border-dashed">
                             <td colSpan="2" className="pt-1 uppercase">Envío:</td>
                             <td className="text-right pt-1">${Number(costoDespacho).toLocaleString()}</td>
@@ -100,15 +111,12 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                 <span>TOTAL:</span>
                 <span>${(Number(total) || 0).toLocaleString()}</span>
             </div>
-
-            {/* NOTAS GENERALES Y PERSONALES */}
-            {(descripcion || notaPersonal) && (
+            {(descripcion || (tipoEntrega === 'REPARTO' && notaPersonal)) && (
                 <div className="mt-3 border-t border-dashed pt-1 space-y-1">
-                    {notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1">Nota: {notaPersonal}</div>}
+                    {tipoEntrega === 'REPARTO' && notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1">Nota: {notaPersonal}</div>}
                     {descripcion && <div className="italic text-[8px] uppercase opacity-75">Obs Cocina: {descripcion}</div>}
                 </div>
             )}
-
             <div className="text-center mt-4 border-t border-dashed pt-2 opacity-50 uppercase text-[8px]">Sistema POS Local - Chile</div>
         </div>
     );
@@ -124,7 +132,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [nombreCliente, setNombreCliente] = useState('');
   const [direccion, setDireccion] = useState('');
   const [telefono, setTelefono] = useState('');
-  const [notaPersonal, setNotaPersonal] = useState(''); // Nota para el cliente
+  const [notaPersonal, setNotaPersonal] = useState('');
   const [costoDespacho, setCostoDespacho] = useState('');
   const [descripcionGeneral, setDescripcionGeneral] = useState('');
   const [horaPedido, setHoraPedido] = useState(new Date().toLocaleTimeString('es-CL', { 
@@ -135,10 +143,12 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [cargando, setCargando] = useState(true); 
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
   const [ultimoPedidoParaImprimir, setUltimoPedidoParaImprimir] = useState(null); 
+  const [cajaAbierta, setCajaAbierta] = useState(false);
 
   const esPrueba = user?.email === "prueba@isakari.com";
   const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
   const COL_MENU = "menu";
+  const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
   
   const inputStyle = "w-full p-4 rounded-2xl border-2 border-gray-100 bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-black uppercase transition-all shadow-sm placeholder:text-gray-300";
 
@@ -157,6 +167,52 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, []);
 
+  // ESCUCHA DE CAJA (Se mantiene onSnapshot porque es un solo documento)
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, COL_CAJAS), where("estado", "==", "abierta"));
+    const unsubscribe = onSnapshot(q, (snap) => {
+        setCajaAbierta(!snap.empty);
+    }, (err) => console.error("Error Caja:", err));
+    return () => unsubscribe();
+  }, [user, COL_CAJAS]);
+
+  // OPTIMIZACIÓN 1: Carga de Menú con getDocs (Lectura única al iniciar)
+  const cargarMenu = async () => {
+    if (!user) return;
+    setCargando(true);
+    try {
+        const snap = await getDocs(collection(db, COL_MENU));
+        setMenu(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
+    } catch (e) { console.error("Error Menu:", e); }
+    finally { setCargando(false); }
+  };
+
+  useEffect(() => { cargarMenu(); }, [user]);
+
+  // OPTIMIZACIÓN 2: Cálculo de Número de Pedido (Solo lee el último documento)
+  const calcularSiguienteNumero = async () => {
+    if (!user || ordenAEditar) return;
+    const hoy = getLocalISODate();
+    const q = query(
+        collection(db, COL_ORDENES), 
+        where("fechaString", "==", hoy),
+        orderBy("numero_pedido", "desc"),
+        limit(1)
+    );
+    try {
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+            setNumeroPedidoVisual(Number(snap.docs[0].data().numero_pedido) + 1);
+        } else {
+            setNumeroPedidoVisual(1);
+        }
+    } catch (e) { console.error("Error Numero Pedido:", e); }
+  };
+
+  useEffect(() => { calcularSiguienteNumero(); }, [user, ordenAEditar]);
+
+  // CARGA DE DATOS AL EDITAR
   useEffect(() => {
     if (ordenAEditar) {
       setOrden(ordenAEditar.items || []);
@@ -172,33 +228,8 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     }
   }, [ordenAEditar]);
 
-  useEffect(() => {
-    const unsubMenu = onSnapshot(collection(db, COL_MENU), (snap) => {
-        setMenu(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
-        setCargando(false);
-    }, (err) => {
-        console.error("Error Menu Raíz:", err);
-        setCargando(false);
-    });
-    return () => unsubMenu();
-  }, []);
+  const totalFinal = orden.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) + (tipoEntrega === 'REPARTO' ? (parseInt(costoDespacho) || 0) : 0);
 
-  useEffect(() => {
-    if (!user) return;
-    const hoy = getLocalISODate();
-    const unsubOrdenes = onSnapshot(collection(db, COL_ORDENES), (snap) => {
-        if (!ordenAEditar) {
-            const docsHoy = snap.docs.filter(d => d.data().fechaString === hoy);
-            const max = docsHoy.reduce((m, d) => Math.max(m, Number(d.data().numero_pedido) || 0), 0);
-            setNumeroPedidoVisual(max + 1);
-        }
-    });
-    return () => unsubOrdenes();
-  }, [user, COL_ORDENES, ordenAEditar]);
-
-  const totalFinal = orden.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) + (parseInt(costoDespacho) || 0);
-
-  // --- LÓGICA DE IMPRESIÓN BASADA EN HISTORIAL ---
   const ejecutarImpresion = (datos) => {
     if (ipcRenderer) {
         ipcRenderer.send('imprimir-ticket-raw', {
@@ -226,20 +257,22 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   const enviarCocina = async () => {
     if (orden.length === 0) return;
-    
-    // Obtenemos la fecha fresca en el momento del click
+    if (!cajaAbierta) {
+        alert("¡ERROR! Debe abrir la CAJA antes de tomar un pedido.");
+        return;
+    }
+
     const hoy = getLocalISODate();
-    
     const datos = {
         items: JSON.parse(JSON.stringify(orden)), 
         total: totalFinal,
-        costo_despacho: parseInt(costoDespacho) || 0, 
+        costo_despacho: tipoEntrega === 'REPARTO' ? (parseInt(costoDespacho) || 0) : 0, 
         tipo_entrega: tipoEntrega, 
         nombre_cliente: String(nombreCliente || 'CLIENTE').toUpperCase(),
         hora_pedido: String(horaPedido), 
-        direccion: String(direccion), 
-        telefono: String(telefono),
-        nota_personal: String(notaPersonal).toUpperCase(),
+        direccion: tipoEntrega === 'REPARTO' ? String(direccion) : '', 
+        telefono: tipoEntrega === 'REPARTO' ? String(telefono) : '',
+        nota_personal: tipoEntrega === 'REPARTO' ? String(notaPersonal).toUpperCase() : '',
         descripcion: String(descripcionGeneral).toUpperCase(), 
         fechaString: ordenAEditar ? (ordenAEditar.fechaString || hoy) : hoy,
         numero_pedido: ordenAEditar ? ordenAEditar.numero_pedido : numeroPedidoVisual,
@@ -251,21 +284,23 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
     try {
         if (ordenAEditar) {
-            await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
+            updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos).catch(e => console.error(e));
             if (onTerminarEdicion) onTerminarEdicion();
         } else {
-            await addDoc(collection(db, COL_ORDENES), datos);
+            addDoc(collection(db, COL_ORDENES), datos).catch(e => console.error(e));
             setNombreCliente(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); setCostoDespacho(''); setDescripcionGeneral('');
             setOrden([]);
+            // Recalculamos el número para la siguiente orden de forma proactiva
+            setNumeroPedidoVisual(prev => prev + 1);
         }
-        
         ejecutarImpresion(datos);
     } catch (error) {
-        console.error("Error al guardar orden:", error);
+        console.error("Error local al procesar orden:", error);
     }
   };
 
   const agregarAlPedido = (p) => {
+    if (!cajaAbierta) { alert("¡ATENCIÓN! No puede agregar productos si la caja está cerrada."); return; }
     const existe = orden.find(item => item.id === p.id);
     if (existe) setOrden(prev => prev.map(item => item.id === p.id ? { ...item, cantidad: item.cantidad + 1 } : item));
     else setOrden(prev => [...prev, { ...p, cantidad: 1, observacion: '' }]);
@@ -273,6 +308,14 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   const ajustarCantidad = (id, delta) => {
     setOrden(prev => prev.map(item => item.id === id ? { ...item, cantidad: Math.max(0, item.cantidad + delta) } : item).filter(item => item.cantidad > 0));
+  };
+
+  const handleNotaItemChange = (idx, valor) => {
+    setOrden(prev => {
+        const nuevaOrden = [...prev];
+        nuevaOrden[idx] = { ...nuevaOrden[idx], observacion: valor.toUpperCase() };
+        return nuevaOrden;
+    });
   };
 
   const categorias = [...new Set(menu.map(m => m.categoria))].filter(Boolean);
@@ -290,32 +333,38 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               </div>
               <div className="flex gap-2">
                   <button onClick={() => setMostrarVistaPrevia(true)} className="p-2 bg-white border border-gray-200 rounded-2xl text-gray-400 hover:text-red-600 shadow-sm transition-all">👁️</button>
-                  <button onClick={enviarCocina} className="bg-red-600 text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg hover:bg-red-700 active:scale-95 transition-all">
-                      {ordenAEditar ? 'ACTUALIZAR' : 'CONFIRMAR'}
+                  <button 
+                    onClick={enviarCocina} 
+                    disabled={!cajaAbierta}
+                    className={`${!cajaAbierta ? 'bg-slate-300 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 active:scale-95'} text-white px-4 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg transition-all`}
+                  >
+                      {!cajaAbierta ? 'CAJA CERRADA' : (ordenAEditar ? 'ACTUALIZAR' : 'CONFIRMAR')}
                   </button>
               </div>
            </div>
+
+           {!cajaAbierta && (
+               <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-center">
+                   <p className="text-[10px] font-black text-amber-600 uppercase m-0 tracking-tighter">⚠️ Debe abrir caja en la sección "CAJA" para continuar</p>
+               </div>
+           )}
            
            <input type="text" placeholder="NOMBRE CLIENTE *" className={inputStyle} value={nombreCliente} onChange={e => setNombreCliente(e.target.value)} />
            
            <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-             <button className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all ${tipoEntrega === 'LOCAL' ? 'bg-white shadow-sm text-red-600' : 'text-gray-400'}`} onClick={() => { setTipoEntrega('LOCAL'); setCostoDespacho(''); }}>LOCAL</button>
+             <button className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all ${tipoEntrega === 'LOCAL' ? 'bg-white shadow-sm text-red-600' : 'text-gray-400'}`} onClick={() => { setTipoEntrega('LOCAL'); setCostoDespacho(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); }}>LOCAL</button>
              <button className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all ${tipoEntrega === 'REPARTO' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`} onClick={() => setTipoEntrega('REPARTO')}>REPARTO</button>
            </div>
            
-           <div className="space-y-2 p-2.5 rounded-2xl border border-slate-100 bg-white shadow-inner">
-             {tipoEntrega === 'REPARTO' && (
+           {tipoEntrega === 'REPARTO' && (
+             <div className="space-y-2 p-2.5 rounded-2xl border-2 border-orange-100 bg-orange-50/50 shadow-inner animate-in fade-in zoom-in-95 duration-200">
                <input type="text" placeholder="Dirección de entrega..." className={inputStyle + " border-orange-200"} value={direccion} onChange={e => setDireccion(e.target.value)} />
-             )}
-             <div className="flex gap-2">
-               <input type="text" placeholder="Teléfono" className={inputStyle + " flex-1"} value={telefono} onChange={e => setTelefono(e.target.value)} />
-               {tipoEntrega === 'REPARTO' && (
+               <div className="flex gap-2">
+                 <input type="text" placeholder="Teléfono" className={inputStyle + " flex-1 border-orange-200"} value={telefono} onChange={e => setTelefono(e.target.value)} />
                  <input type="number" placeholder="Envío" className={inputStyle + " border-orange-200 w-24 text-right"} value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
-               )}
+               </div>
              </div>
-             {/* CAMPO DE NOTA PARA EL TICKET */}
-             <input type="text" placeholder="NOTA PARA EL CLIENTE (EN TICKET)" className={inputStyle + " border-blue-50"} value={notaPersonal} onChange={e => setNotaPersonal(e.target.value)} />
-           </div>
+           )}
            
            <div className="px-3 py-3 bg-slate-900 text-white rounded-xl flex justify-between items-center shadow-lg border border-slate-800">
               <span className="text-[10px] font-black uppercase opacity-60 tracking-widest">Total</span>
@@ -323,7 +372,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
            </div>
 
            <textarea 
-             placeholder="OBSERVACIONES PARA COCINA..." 
+             placeholder="OBSERVACIONES GENERALES (COCINA)..." 
              className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner" 
              value={descripcionGeneral} 
              onChange={e => setDescripcionGeneral(e.target.value)} 
@@ -337,22 +386,22 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                     <span className="flex-1 mr-2 leading-tight">{item.nombre}</span>
                     <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded-lg h-fit text-[10px]">{item.cantidad}x</span>
                 </div>
-                <div className="mt-2 flex justify-between items-center">
-                    <button onClick={() => {
-                        const n = prompt("Nota Producto:", item.observacion || "");
-                        if (n !== null) setOrden(prev => {
-                            const copy = [...prev]; copy[idx] = { ...copy[idx], observacion: n.toUpperCase() }; return copy;
-                        });
-                    }} className="text-[10px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-1 rounded-lg">Nota Item</button>
-                    <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
+                <div className="mt-2 flex gap-2 items-center">
+                    <div className="flex-1 relative group">
+                        <input 
+                            type="text"
+                            placeholder="Nota: sin queso..."
+                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner"
+                            value={item.observacion || ''}
+                            onChange={(e) => handleNotaItemChange(idx, e.target.value)}
+                        />
+                    </div>
+                    <div className="flex items-center bg-slate-100 rounded-lg p-0.5 flex-shrink-0">
                         <button onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black">-</button>
-                        <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded">{item.cantidad}</span>
+                        <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded shadow-sm">{item.cantidad}</span>
                         <button onClick={() => ajustarCantidad(item.id, 1)} className="px-2 text-gray-500 font-black">+</button>
                     </div>
                 </div>
-                {item.observacion && (
-                    <div className="mt-1 text-[9px] font-black text-amber-600 italic bg-amber-50 p-1.5 rounded-lg border border-amber-100">★ {item.observacion}</div>
-                )}
             </div>
           ))}
           {orden.length === 0 && <div className="p-8 text-center text-slate-300 font-black uppercase text-[10px] tracking-widest mt-10 italic">Carrito Vacío</div>}
@@ -360,6 +409,9 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       </aside>
 
       <main className="flex-1 p-8 overflow-y-auto bg-slate-50 custom-scrollbar no-print">
+        <div className="mb-4 flex justify-end">
+            <button onClick={cargarMenu} className="text-[9px] font-black uppercase text-slate-400 hover:text-red-600 transition-colors">Refrescar Menú 🔄</button>
+        </div>
         {!categoriaActual ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 animate-in slide-in-from-bottom-4 duration-300">
             {categorias.length > 0 ? categorias.map(cat => (
@@ -393,7 +445,28 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         )}
       </main>
 
-      {/* ÁREA DE IMPRESIÓN (HIDDEN PRINT:BLOCK) */}
+      {mostrarVistaPrevia && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[99999] flex items-center justify-center p-4 animate-in fade-in" onClick={() => setMostrarVistaPrevia(false)}>
+            <div className="bg-white rounded-[3rem] p-8 max-w-sm w-full max-h-[90vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+                <Ticket 
+                  orden={orden} 
+                  total={totalFinal} 
+                  numeroPedido={numeroPedidoVisual} 
+                  tipoEntrega={tipoEntrega} 
+                  fecha={getLocalISODate()} 
+                  hora={horaPedido} 
+                  cliente={nombreCliente} 
+                  direccion={direccion}
+                  telefono={telefono}
+                  notaPersonal={notaPersonal}
+                  descripcion={descripcionGeneral} 
+                  costoDespacho={costoDespacho}
+                />
+                <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl shadow-xl no-print hover:bg-black transition-colors">Cerrar Vista</button>
+            </div>
+        </div>
+      )}
+
       {ultimoPedidoParaImprimir && (
         <div className="hidden print:block fixed inset-0 bg-white z-[10000]">
             <Ticket 
@@ -409,31 +482,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               notaPersonal={ultimoPedidoParaImprimir.nota_personal}
               descripcion={ultimoPedidoParaImprimir.descripcion} 
               costoDespacho={ultimoPedidoParaImprimir.costo_despacho}
-              descuento={0}
             />
-        </div>
-      )}
-
-      {mostrarVistaPrevia && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[99999] flex items-center justify-center p-4 animate-in fade-in" onClick={() => setMostrarVistaPrevia(false)}>
-            <div className="bg-white rounded-[3rem] p-8 max-w-sm w-full max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
-                <Ticket 
-                  orden={orden} 
-                  total={totalFinal} 
-                  numeroPedido={numeroPedidoVisual} 
-                  tipoEntrega={tipoEntrega} 
-                  fecha={getLocalISODate()} 
-                  hora={horaPedido} 
-                  cliente={nombreCliente} 
-                  direccion={direccion}
-                  telefono={telefono}
-                  notaPersonal={notaPersonal}
-                  descripcion={descripcionGeneral} 
-                  costoDespacho={costoDespacho}
-                  descuento={0}
-                />
-                <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl shadow-xl no-print">Cerrar Vista</button>
-            </div>
         </div>
       )}
 

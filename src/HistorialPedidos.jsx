@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
   query, 
@@ -8,11 +8,14 @@ import {
   updateDoc, 
   addDoc, 
   Timestamp,
-  deleteDoc 
+  deleteDoc,
+  getDocs,
+  orderBy,
+  limit
 } from 'firebase/firestore';
-import { db } from './firebase.js';
-import { useUi } from './context/UiContext.jsx';
-import Ticket from './Ticket.jsx'; 
+import { db } from './firebase'; // Corregido: ruta de importación
+import { useUi } from './context/UiContext'; // Corregido: ruta de importación
+import Ticket from './Ticket'; // Corregido: ruta de importación
 
 // --- DETECCIÓN DE ELECTRON ---
 const ipcRenderer = (function() {
@@ -41,18 +44,17 @@ export default function HistorialPedidos({ onEditar, user }) {
   const [pedidos, setPedidos] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState('todos');
-  
-  // CORRECCIÓN: Inicializamos con la fecha local de Chile
   const [fechaFiltro, setFechaFiltro] = useState(getLocalISODate());
   
+  // Estados para el Cobro
   const [pedidoParaCobrar, setPedidoParaCobrar] = useState(null);
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [modoPago, setModoPago] = useState('unico'); 
   const [metodoUnico, setMetodoUnico] = useState('Efectivo');
   const [aplicarDescuento, setAplicarDescuento] = useState(false);
   
-  const [montosMixtos, setMontosMixtos] = useState({ Efectivo: '', Tarjeta: '', Transferencia: '', Otro: '' });
-  const [metodosHabilitados, setMetodosHabilitados] = useState({ Efectivo: true, Tarjeta: false, Transferencia: false, Otro: false });
+  const [montosMixtos, setMontosMixtos] = useState({ Efectivo: '', Transferencia: '', Débito: '' });
+  const [metodosHabilitados, setMetodosHabilitados] = useState({ Efectivo: true, Transferencia: false, Débito: false });
   const [pedidoActivoParaImprimir, setPedidoActivoParaImprimir] = useState(null);
 
   const colOrdenes = user?.email === "prueba@isakari.com" ? "ordenes_pruebas" : "ordenes";
@@ -62,34 +64,52 @@ export default function HistorialPedidos({ onEditar, user }) {
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
+  // OPTIMIZACIÓN DE LECTURAS: 
   useEffect(() => {
     if (!user) return;
     setCargando(true);
     
+    const hoy = getLocalISODate();
     const q = query(collection(db, colOrdenes), where("fechaString", "==", fechaFiltro));
     
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const docs = snap.docs.map(d => {
-        const data = d.data();
-        return {
-          id: d.id,
-          ...data,
-          estado_pago: String(data.estado_pago || data.estadoPago || "Pendiente").trim(),
-          metodo_pago: data.metodo_pago || data.medioPago || "N/A"
-        };
-      });
-      docs.sort((a, b) => (b.numero_pedido || 0) - (a.numero_pedido || 0));
-      setPedidos(docs);
-      setCargando(false);
-    }, (err) => {
-      console.error("Error en historial:", err);
-      setCargando(false);
-    });
-    return () => unsubscribe();
+    let unsubscribe;
+
+    if (fechaFiltro === hoy) {
+        // Escucha en tiempo real solo para hoy
+        unsubscribe = onSnapshot(q, (snap) => {
+            const docs = snap.docs.map(d => ({
+                id: d.id,
+                ...d.data(),
+                estado_pago: String(d.data().estado_pago || "Pendiente").trim()
+            }));
+            docs.sort((a, b) => (b.numero_pedido || 0) - (a.numero_pedido || 0));
+            setPedidos(docs);
+            setCargando(false);
+        }, (err) => {
+            console.error("Error historial hoy:", err);
+            setCargando(false);
+        });
+    } else {
+        // Lectura única para el pasado
+        getDocs(q).then((snap) => {
+            const docs = snap.docs.map(d => ({
+                id: d.id,
+                ...d.data(),
+                estado_pago: String(d.data().estado_pago || "Pendiente").trim()
+            }));
+            docs.sort((a, b) => (b.numero_pedido || 0) - (a.numero_pedido || 0));
+            setPedidos(docs);
+            setCargando(false);
+        }).catch(err => {
+            console.error("Error historial pasado:", err);
+            setCargando(false);
+        });
+    }
+
+    return () => unsubscribe && unsubscribe();
   }, [user, colOrdenes, fechaFiltro]);
 
   const ejecutarImpresionAutomatica = (pedido) => {
-    notificar(`Imprimiendo ticket orden #${pedido.numero_pedido}...`, "success");
     if (ipcRenderer) {
         ipcRenderer.send('imprimir-ticket-raw', {
             numeroPedido: pedido.numero_pedido,
@@ -117,7 +137,6 @@ export default function HistorialPedidos({ onEditar, user }) {
   const toggleMetodoMixto = (metodo) => {
     const nuevoEstado = !metodosHabilitados[metodo];
     setMetodosHabilitados(prev => ({ ...prev, [metodo]: nuevoEstado }));
-    
     const totalOriginal = pedidoParaCobrar?.total || 0;
     const desc = aplicarDescuento ? Math.round(totalOriginal * 0.1) : 0;
     const totalObjetivo = totalOriginal - desc;
@@ -131,45 +150,6 @@ export default function HistorialPedidos({ onEditar, user }) {
     } else {
       setMontosMixtos(prev => ({ ...prev, [metodo]: '' }));
     }
-  };
-
-  const handleEliminarPedido = async (pedido) => {
-    if (!window.confirm(`¿ESTÁS SEGURO? Eliminarás permanentemente el pedido #${pedido.numero_pedido} de ${pedido.nombre_cliente}.`)) return;
-    try {
-      await deleteDoc(doc(db, colOrdenes, pedido.id));
-      notificar(`Pedido #${pedido.numero_pedido} eliminado`, "success");
-    } catch (e) {
-      console.error(e);
-      notificar("Error al eliminar el pedido", "error");
-    }
-  };
-
-  const handleAnularPago = () => {
-    if (!pedidoParaCobrar) return;
-    if (!window.confirm(`¿Quieres quitar el pago del pedido #${pedidoParaCobrar.numero_pedido}? Volverá a estar pendiente.`)) return;
-
-    updateDoc(doc(db, colOrdenes, pedidoParaCobrar.id), {
-      estado_pago: 'Pendiente',
-      metodo_pago: 'N/A',
-      detalles_pago: [],
-      descuento: 0,
-      total_pagado: 0,
-      fecha_pago: null
-    }).then(() => {
-      addDoc(collection(db, colMovimientos), {
-        tipo: 'egreso',
-        categoria: 'ANULACION',
-        monto: pedidoParaCobrar.total_pagado || pedidoParaCobrar.total,
-        descripcion: `ANULACIÓN PAGO PEDIDO #${pedidoParaCobrar.numero_pedido}`,
-        metodo: pedidoParaCobrar.metodo_pago || 'Otro',
-        fecha: Timestamp.now(),
-        usuario_id: user.uid,
-        pedido_id: pedidoParaCobrar.id
-      });
-      setPedidoParaCobrar(null);
-      setAplicarDescuento(false);
-      notificar(`Pago anulado`, "success");
-    });
   };
 
   const confirmarPago = () => {
@@ -192,31 +172,65 @@ export default function HistorialPedidos({ onEditar, user }) {
     }
 
     setProcesandoPago(true);
-    updateDoc(doc(db, colOrdenes, p.id), {
+
+    // Optimización offline: No esperamos al servidor
+    const pedidoRef = doc(db, colOrdenes, p.id);
+    updateDoc(pedidoRef, {
       estado_pago: 'Pagado',
       metodo_pago: modoPago === 'unico' ? metodoUnico : 'Mixto',
       detalles_pago: metodosFinales,
       descuento: montoDescuento,
       total_pagado: totalIngresado,
       fecha_pago: Timestamp.now()
-    }).then(() => {
-      metodosFinales.forEach(item => {
-        addDoc(collection(db, colMovimientos), {
-          tipo: 'ingreso',
-          categoria: 'VENTA',
-          monto: item.monto,
-          descripcion: `VENTA PEDIDO #${p.numero_pedido}${aplicarDescuento ? ' (DESC 10%)' : ''}`,
-          metodo: item.metodo,
-          fecha: Timestamp.now(),
-          usuario_id: user.uid,
-          pedido_id: p.id
-        });
-      });
-      notificar(`¡Pago registrado!`, "success");
-      setPedidoParaCobrar(null);
-      setAplicarDescuento(false);
-      setProcesandoPago(false);
+    }).catch(err => console.error("Error sincronización pago:", err));
+
+    metodosFinales.forEach(item => {
+      addDoc(collection(db, colMovimientos), {
+        tipo: 'ingreso',
+        categoria: 'VENTA',
+        monto: item.monto,
+        descripcion: `VENTA PEDIDO #${p.numero_pedido}${aplicarDescuento ? ' (DESC 10%)' : ''}`,
+        metodo: item.metodo,
+        fecha: Timestamp.now(),
+        usuario_id: user.uid,
+        pedido_id: p.id
+      }).catch(err => console.error("Error sincronización movimiento:", err));
     });
+
+    notificar(`¡Pago registrado!`, "success");
+    setPedidoParaCobrar(null);
+    setAplicarDescuento(false);
+    setProcesandoPago(false);
+  };
+
+  const handleAnularPago = () => {
+    if (!pedidoParaCobrar) return;
+    if (!window.confirm(`¿Quieres quitar el pago del pedido #${pedidoParaCobrar.numero_pedido}?`)) return;
+
+    const p = pedidoParaCobrar;
+    updateDoc(doc(db, colOrdenes, p.id), {
+      estado_pago: 'Pendiente',
+      metodo_pago: 'N/A',
+      detalles_pago: [],
+      descuento: 0,
+      total_pagado: 0,
+      fecha_pago: null
+    }).catch(e => console.error(e));
+
+    addDoc(collection(db, colMovimientos), {
+      tipo: 'egreso',
+      categoria: 'ANULACION',
+      monto: p.total_pagado || p.total,
+      descripcion: `ANULACIÓN PAGO PEDIDO #${p.numero_pedido}`,
+      metodo: p.metodo_pago || 'Otro',
+      fecha: Timestamp.now(),
+      usuario_id: user.uid,
+      pedido_id: p.id
+    }).catch(e => console.error(e));
+
+    setPedidoParaCobrar(null);
+    setAplicarDescuento(false);
+    notificar(`Pago anulado`, "success");
   };
 
   return (
@@ -224,7 +238,7 @@ export default function HistorialPedidos({ onEditar, user }) {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
         <div>
           <h2 className="text-3xl font-black uppercase tracking-tighter text-slate-900 m-0 leading-none">Ventas Registradas</h2>
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Isakari Sushi POS • Gestión de Historial</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Gestión Histórica • {pedidos.length} Pedidos</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-3xl shadow-sm border border-slate-200">
@@ -253,7 +267,7 @@ export default function HistorialPedidos({ onEditar, user }) {
       </div>
 
       {cargando ? (
-        <div className="py-20 text-center font-black text-slate-300 animate-pulse uppercase tracking-widest text-xs">Cargando datos...</div>
+        <div className="py-20 text-center font-black text-slate-300 animate-pulse uppercase tracking-widest text-xs">Cargando datos del servidor...</div>
       ) : (
         <div className="grid gap-4 pb-32">
           {pedidos
@@ -265,6 +279,7 @@ export default function HistorialPedidos({ onEditar, user }) {
               return (
                 <div key={pedido.id} className={`p-6 rounded-[2.5rem] border-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between bg-white transition-all ${isDelivered ? 'border-emerald-500/20' : 'border-amber-400/20'}`}>
                   <div className="flex items-start gap-5 flex-1 min-w-0">
+                    {/* Fondo naranja sólido para que el número blanco sea legible */}
                     <div className={`w-14 h-14 rounded-2xl flex-shrink-0 flex items-center justify-center font-black text-white text-lg shadow-lg ${isDelivered ? 'bg-emerald-600' : 'bg-amber-500'}`}>
                       #{pedido.numero_pedido}
                     </div>
@@ -287,7 +302,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                                         <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-900 w-8 text-center">{item.cantidad}x</span>
                                         <span>{item.nombre}</span>
                                     </div>
-                                    {item.observacion && <span className="text-[8px] text-amber-600 ml-10 italic lowercase">↳ {item.observacion}</span>}
+                                    {item.observacion && <span className="text-[8px] text-blue-600 ml-10 italic lowercase">↳ {item.observacion}</span>}
                                 </div>
                             </div>
                         ))}
@@ -302,14 +317,21 @@ export default function HistorialPedidos({ onEditar, user }) {
                         {isPaid ? `PAGADO (${pedido.metodo_pago})` : 'PAGO PENDIENTE'}
                         {pedido.descuento > 0 && <span className="ml-2 text-blue-500">-10% DESC.</span>}
                       </div>
+                      {isPaid && pedido.detalles_pago?.length > 0 && (
+                        <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 justify-start md:justify-end">
+                          {pedido.detalles_pago.map((dp, i) => (
+                            <span key={i} className="text-[7px] font-bold uppercase text-slate-400 bg-slate-50 px-1 rounded">
+                              {dp.metodo}: {formatPeso(dp.monto)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     
                     <div className="flex gap-2">
                       <button onClick={() => ejecutarImpresionAutomatica(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Imprimir"><i className="bi bi-printer"></i></button>
                       <button onClick={() => onEditar(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil"></i></button>
                       
-                      <button onClick={() => handleEliminarPedido(pedido)} className="w-11 h-11 rounded-xl bg-red-50 text-red-500 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm"><i className="bi bi-trash3-fill"></i></button>
-
                       <button 
                         onClick={async () => await updateDoc(doc(db, colOrdenes, pedido.id), { estado: isDelivered ? 'pendiente' : 'entregado' })} 
                         className={`px-4 h-11 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${isDelivered ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-amber-600 border-amber-200'}`}
@@ -332,6 +354,7 @@ export default function HistorialPedidos({ onEditar, user }) {
         </div>
       )}
 
+      {/* Modal de Cobro */}
       {pedidoParaCobrar && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[9999] flex items-center justify-center p-4">
           <div className="bg-white rounded-[3rem] shadow-2xl p-10 w-full max-w-md border border-white scale-in" onClick={e => e.stopPropagation()}>
@@ -375,14 +398,14 @@ export default function HistorialPedidos({ onEditar, user }) {
 
             {modoPago === 'unico' ? (
                 <div className="grid grid-cols-2 gap-2 mb-8">
-                    {['Efectivo', 'Tarjeta', 'Transferencia', 'Otro'].map(m => (
+                    {['Efectivo', 'Transferencia', 'Débito'].map(m => (
                         <button key={m} onClick={() => setMetodoUnico(m)} className={`py-4 rounded-2xl font-black text-[11px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}>{m}</button>
                     ))}
                 </div>
             ) : (
                 <div className="space-y-4 mb-8">
                     <div className="grid grid-cols-2 gap-3">
-                        {['Efectivo', 'Tarjeta', 'Transferencia', 'Otro'].map(m => (
+                        {['Efectivo', 'Transferencia', 'Débito'].map(m => (
                             <div key={m} className="flex flex-col gap-2">
                                 <button 
                                   onClick={() => toggleMetodoMixto(m)} 
@@ -452,6 +475,8 @@ export default function HistorialPedidos({ onEditar, user }) {
             .print\\:block, .print\\:block * { visibility: visible; } 
             .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; } 
         }
+        .scale-in { animation: scaleIn 0.2s ease-out; }
+        @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       `}</style>
     </div>
   );
