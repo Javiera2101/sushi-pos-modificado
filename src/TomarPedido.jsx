@@ -27,27 +27,42 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 const auth = getAuth(app);
 
-// --- UTILIDADES DE FECHA LOCAL (CHILE) ---
-const getLocalISODate = (dateInput = new Date()) => {
-  const d = dateInput instanceof Date ? dateInput : (dateInput?.toDate ? dateInput.toDate() : new Date(dateInput));
-  if (!d || isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });
+// --- DETECCIÓN DE ELECTRON (Para impresión directa si existe) ---
+const ipcRenderer = (function() {
+  try {
+    if (typeof window !== 'undefined' && window.require) {
+      const electron = window.require('electron');
+      return electron ? electron.ipcRenderer : null;
+    }
+  } catch (e) { return null; }
+  return null;
+})();
+
+// --- UTILIDADES DE FECHA LOCAL (CHILE) - CORREGIDO PARA EVITAR SALTO DE DÍA ---
+const getLocalISODate = (dateInput) => {
+  const d = dateInput ? (dateInput instanceof Date ? dateInput : (dateInput?.toDate ? dateInput.toDate() : new Date(dateInput))) : new Date();
+  
+  // Usamos Intl para asegurar que el formato YYYY-MM-DD se base siempre en Santiago
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
 };
 
 // --- COMPONENTE TICKET ---
-const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, costoDespacho }) => {
-    // Convertir fecha a string de forma segura para evitar error "Objects are not valid as a React child"
-    const fechaTexto = (fecha && typeof fecha === 'object' && 'toDate' in fecha) 
-        ? getLocalISODate(fecha) 
-        : String(fecha || '');
+const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, descuento }) => {
+    // Formateamos la fecha para mostrarla amigablemente DD/MM/YYYY
+    const fechaChile = fecha && fecha.includes('-') ? fecha.split('-').reverse().join('/') : fecha;
 
     return (
         <div className="bg-white p-4 border border-gray-200 font-mono text-[10px] leading-tight max-w-[300px] mx-auto text-black shadow-inner">
             <div className="text-center font-black mb-1 uppercase text-xs">Isakari Sushi</div>
-            <div className="text-center mb-2">Orden #{numeroPedido}</div>
+            <div className="text-center mb-2 font-black">Orden #{numeroPedido}</div>
             <div className="border-b border-dashed border-gray-400 mb-2"></div>
             <div className="mb-2 space-y-1">
-                <div>FECHA: {fechaTexto} {hora}</div>
+                <div>FECHA: {fechaChile} {hora}</div>
                 <div className="uppercase">CLIENTE: {cliente}</div>
                 <div className="uppercase font-bold">TIPO: {tipoEntrega}</div>
                 {telefono && <div>TEL: {telefono}</div>}
@@ -57,10 +72,20 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
             <table className="w-full mb-2">
                 <tbody>
                     {orden?.map((item, idx) => (
-                        <tr key={idx} className="align-top">
-                            <td className="pr-1">{item.cantidad}x</td>
-                            <td className="w-full uppercase">{item.nombre} {item.observacion && <div className="text-[8px] italic lowercase">({item.observacion})</div>}</td>
-                            <td className="text-right whitespace-nowrap">${(item.precio * item.cantidad).toLocaleString()}</td>
+                        <tr key={idx} className="align-top border-b border-gray-50 last:border-0">
+                            <td className="pr-1 font-bold">{item.cantidad}x</td>
+                            <td className="w-full uppercase">
+                                <div className="font-bold">{item.nombre}</div>
+                                {/* NOTA INDIVIDUAL POR PRODUCTO */}
+                                {item.observacion && (
+                                    <div className="text-[8px] italic lowercase leading-none mt-0.5 text-gray-600">
+                                        ↳ {item.observacion}
+                                    </div>
+                                )}
+                            </td>
+                            <td className="text-right whitespace-nowrap pl-1">
+                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString()}
+                            </td>
                         </tr>
                     ))}
                     {Number(costoDespacho) > 0 && (
@@ -75,7 +100,15 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                 <span>TOTAL:</span>
                 <span>${(Number(total) || 0).toLocaleString()}</span>
             </div>
-            {descripcion && <div className="mt-3 italic text-[8px] uppercase border-t pt-1">Nota: {descripcion}</div>}
+
+            {/* NOTAS GENERALES Y PERSONALES */}
+            {(descripcion || notaPersonal) && (
+                <div className="mt-3 border-t border-dashed pt-1 space-y-1">
+                    {notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1">Nota: {notaPersonal}</div>}
+                    {descripcion && <div className="italic text-[8px] uppercase opacity-75">Obs Cocina: {descripcion}</div>}
+                </div>
+            )}
+
             <div className="text-center mt-4 border-t border-dashed pt-2 opacity-50 uppercase text-[8px]">Sistema POS Local - Chile</div>
         </div>
     );
@@ -91,6 +124,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [nombreCliente, setNombreCliente] = useState('');
   const [direccion, setDireccion] = useState('');
   const [telefono, setTelefono] = useState('');
+  const [notaPersonal, setNotaPersonal] = useState(''); // Nota para el cliente
   const [costoDespacho, setCostoDespacho] = useState('');
   const [descripcionGeneral, setDescripcionGeneral] = useState('');
   const [horaPedido, setHoraPedido] = useState(new Date().toLocaleTimeString('es-CL', { 
@@ -102,7 +136,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
   const [ultimoPedidoParaImprimir, setUltimoPedidoParaImprimir] = useState(null); 
 
-  // --- COLECCIONES DESDE LA RAÍZ ---
   const esPrueba = user?.email === "prueba@isakari.com";
   const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
   const COL_MENU = "menu";
@@ -131,6 +164,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       setTipoEntrega(ordenAEditar.tipo_entrega || 'LOCAL');
       setDireccion(ordenAEditar.direccion || '');
       setTelefono(ordenAEditar.telefono || '');
+      setNotaPersonal(ordenAEditar.nota_personal || '');
       setCostoDespacho(ordenAEditar.costo_despacho || '');
       setNumeroPedidoVisual(ordenAEditar.numero_pedido);
       setDescripcionGeneral(ordenAEditar.descripcion || '');
@@ -138,7 +172,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     }
   }, [ordenAEditar]);
 
-  // Listener del Menú (Desde la raíz)
   useEffect(() => {
     const unsubMenu = onSnapshot(collection(db, COL_MENU), (snap) => {
         setMenu(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
@@ -150,7 +183,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubMenu();
   }, []);
 
-  // Listener de Órdenes (Desde la raíz)
   useEffect(() => {
     if (!user) return;
     const hoy = getLocalISODate();
@@ -166,9 +198,38 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   const totalFinal = orden.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) + (parseInt(costoDespacho) || 0);
 
-  const enviarCocina = () => {
+  // --- LÓGICA DE IMPRESIÓN BASADA EN HISTORIAL ---
+  const ejecutarImpresion = (datos) => {
+    if (ipcRenderer) {
+        ipcRenderer.send('imprimir-ticket-raw', {
+            numeroPedido: datos.numero_pedido,
+            cliente: datos.nombre_cliente,
+            orden: datos.items, 
+            total: datos.total,
+            costoDespacho: datos.costo_despacho || 0,
+            tipoEntrega: datos.tipo_entrega,
+            direccion: datos.direccion,
+            telefono: datos.telefono,
+            descripcion: datos.descripcion,
+            notaPersonal: datos.nota_personal,
+            fecha: String(datos.fechaString).split('-').reverse().join('/'),
+            descuento: 0
+        });
+    } else {
+        setUltimoPedidoParaImprimir(datos);
+        setTimeout(() => {
+            window.print();
+            setUltimoPedidoParaImprimir(null);
+        }, 800);
+    }
+  };
+
+  const enviarCocina = async () => {
     if (orden.length === 0) return;
+    
+    // Obtenemos la fecha fresca en el momento del click
     const hoy = getLocalISODate();
+    
     const datos = {
         items: JSON.parse(JSON.stringify(orden)), 
         total: totalFinal,
@@ -178,6 +239,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         hora_pedido: String(horaPedido), 
         direccion: String(direccion), 
         telefono: String(telefono),
+        nota_personal: String(notaPersonal).toUpperCase(),
         descripcion: String(descripcionGeneral).toUpperCase(), 
         fechaString: ordenAEditar ? (ordenAEditar.fechaString || hoy) : hoy,
         numero_pedido: ordenAEditar ? ordenAEditar.numero_pedido : numeroPedidoVisual,
@@ -187,22 +249,26 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         usuario_id: user?.uid || "anonimo"
     };
 
-    if (ordenAEditar) {
-        updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos).catch(() => {});
-        if (onTerminarEdicion) onTerminarEdicion();
-    } else {
-        addDoc(collection(db, COL_ORDENES), datos).catch(() => {});
-        setOrden([]); setNombreCliente(''); setDireccion(''); setTelefono(''); setCostoDespacho(''); setDescripcionGeneral('');
+    try {
+        if (ordenAEditar) {
+            await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
+            if (onTerminarEdicion) onTerminarEdicion();
+        } else {
+            await addDoc(collection(db, COL_ORDENES), datos);
+            setNombreCliente(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); setCostoDespacho(''); setDescripcionGeneral('');
+            setOrden([]);
+        }
+        
+        ejecutarImpresion(datos);
+    } catch (error) {
+        console.error("Error al guardar orden:", error);
     }
-    
-    setUltimoPedidoParaImprimir(datos);
-    setTimeout(() => { window.print(); setUltimoPedidoParaImprimir(null); }, 1200);
   };
 
   const agregarAlPedido = (p) => {
     const existe = orden.find(item => item.id === p.id);
-    if (existe) setOrden(orden.map(item => item.id === p.id ? { ...item, cantidad: item.cantidad + 1 } : item));
-    else setOrden([...orden, { ...p, cantidad: 1, observacion: '' }]);
+    if (existe) setOrden(prev => prev.map(item => item.id === p.id ? { ...item, cantidad: item.cantidad + 1 } : item));
+    else setOrden(prev => [...prev, { ...p, cantidad: 1, observacion: '' }]);
   };
 
   const ajustarCantidad = (id, delta) => {
@@ -214,8 +280,8 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-300 animate-pulse bg-slate-50 italic tracking-widest">Sincronizando con Servidor...</div>;
 
   return (
-    <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative">
-      <aside className="w-[400px] h-full bg-white shadow-xl flex flex-col z-20 border-r border-gray-200 flex-shrink-0">
+    <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative main-app-container">
+      <aside className="w-[400px] h-full bg-white shadow-xl flex flex-col z-20 border-r border-gray-200 flex-shrink-0 no-print">
         <div className="p-3 border-b border-gray-100 bg-gray-50 flex-shrink-0 space-y-2">
            <div className="flex items-center justify-between">
               <div>
@@ -237,15 +303,19 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
              <button className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all ${tipoEntrega === 'REPARTO' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`} onClick={() => setTipoEntrega('REPARTO')}>REPARTO</button>
            </div>
            
-           {tipoEntrega === 'REPARTO' && (
-             <div className="space-y-2 bg-orange-50 p-2.5 rounded-2xl border border-orange-100 animate-fade-in shadow-inner">
+           <div className="space-y-2 p-2.5 rounded-2xl border border-slate-100 bg-white shadow-inner">
+             {tipoEntrega === 'REPARTO' && (
                <input type="text" placeholder="Dirección de entrega..." className={inputStyle + " border-orange-200"} value={direccion} onChange={e => setDireccion(e.target.value)} />
-               <div className="flex gap-2">
-                 <input type="text" placeholder="Teléfono" className={inputStyle + " border-orange-200 flex-1"} value={telefono} onChange={e => setTelefono(e.target.value)} />
+             )}
+             <div className="flex gap-2">
+               <input type="text" placeholder="Teléfono" className={inputStyle + " flex-1"} value={telefono} onChange={e => setTelefono(e.target.value)} />
+               {tipoEntrega === 'REPARTO' && (
                  <input type="number" placeholder="Envío" className={inputStyle + " border-orange-200 w-24 text-right"} value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
-               </div>
+               )}
              </div>
-           )}
+             {/* CAMPO DE NOTA PARA EL TICKET */}
+             <input type="text" placeholder="NOTA PARA EL CLIENTE (EN TICKET)" className={inputStyle + " border-blue-50"} value={notaPersonal} onChange={e => setNotaPersonal(e.target.value)} />
+           </div>
            
            <div className="px-3 py-3 bg-slate-900 text-white rounded-xl flex justify-between items-center shadow-lg border border-slate-800">
               <span className="text-[10px] font-black uppercase opacity-60 tracking-widest">Total</span>
@@ -253,7 +323,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
            </div>
 
            <textarea 
-             placeholder="NOTAS GENERALES DEL PEDIDO..." 
+             placeholder="OBSERVACIONES PARA COCINA..." 
              className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner" 
              value={descripcionGeneral} 
              onChange={e => setDescripcionGeneral(e.target.value)} 
@@ -269,11 +339,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                 </div>
                 <div className="mt-2 flex justify-between items-center">
                     <button onClick={() => {
-                        const n = prompt("Nota:", item.observacion || "");
+                        const n = prompt("Nota Producto:", item.observacion || "");
                         if (n !== null) setOrden(prev => {
                             const copy = [...prev]; copy[idx] = { ...copy[idx], observacion: n.toUpperCase() }; return copy;
                         });
-                    }} className="text-[10px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-1 rounded-lg">Nota</button>
+                    }} className="text-[10px] font-black text-blue-600 uppercase bg-blue-50 px-2 py-1 rounded-lg">Nota Item</button>
                     <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
                         <button onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black">-</button>
                         <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded">{item.cantidad}</span>
@@ -289,7 +359,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         </div>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto bg-slate-50 custom-scrollbar">
+      <main className="flex-1 p-8 overflow-y-auto bg-slate-50 custom-scrollbar no-print">
         {!categoriaActual ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 animate-in slide-in-from-bottom-4 duration-300">
             {categorias.length > 0 ? categorias.map(cat => (
@@ -299,7 +369,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               </button>
             )) : (
               <div className="col-span-full py-20 text-center text-slate-300 font-black uppercase text-xs tracking-[0.3em]">
-                {cargando ? "Cargando Menú..." : "No hay productos en el Menú de la Raíz"}
+                {cargando ? "Cargando Menú..." : "No hay productos en el Menú"}
               </div>
             )}
           </div>
@@ -323,6 +393,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         )}
       </main>
 
+      {/* ÁREA DE IMPRESIÓN (HIDDEN PRINT:BLOCK) */}
       {ultimoPedidoParaImprimir && (
         <div className="hidden print:block fixed inset-0 bg-white z-[10000]">
             <Ticket 
@@ -335,8 +406,10 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               cliente={ultimoPedidoParaImprimir.nombre_cliente} 
               direccion={ultimoPedidoParaImprimir.direccion}
               telefono={ultimoPedidoParaImprimir.telefono}
+              notaPersonal={ultimoPedidoParaImprimir.nota_personal}
               descripcion={ultimoPedidoParaImprimir.descripcion} 
               costoDespacho={ultimoPedidoParaImprimir.costo_despacho}
+              descuento={0}
             />
         </div>
       )}
@@ -354,10 +427,12 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                   cliente={nombreCliente} 
                   direccion={direccion}
                   telefono={telefono}
+                  notaPersonal={notaPersonal}
                   descripcion={descripcionGeneral} 
                   costoDespacho={costoDespacho}
+                  descuento={0}
                 />
-                <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl shadow-xl">Cerrar Vista</button>
+                <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl shadow-xl no-print">Cerrar Vista</button>
             </div>
         </div>
       )}
@@ -365,10 +440,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        @media print {
-            body * { visibility: hidden; }
-            .print\\:block, .print\\:block * { visibility: visible; }
-            .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; }
+        
+        @media print { 
+          body * { visibility: hidden; } 
+          .print\\:block, .print\\:block * { visibility: visible; } 
+          .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; z-index: 10000; } 
         }
       `}</style>
     </div>

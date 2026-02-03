@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   collection, 
   query, 
+  where, 
   onSnapshot, 
   doc, 
   updateDoc, 
@@ -12,8 +13,8 @@ import {
 import { db } from './firebase.js';
 import { useUi } from './context/UiContext.jsx';
 import Ticket from './Ticket.jsx'; 
-import { getLocalISODate } from './utils/dateUtils.js';
 
+// --- DETECCIÓN DE ELECTRON ---
 const ipcRenderer = (function() {
   try {
     if (typeof window !== 'undefined' && window.require) {
@@ -24,11 +25,24 @@ const ipcRenderer = (function() {
   return null;
 })();
 
+// --- UTILIDAD DE FECHA LOCAL (CHILE) ---
+const getLocalISODate = (dateInput) => {
+  const d = dateInput ? (dateInput instanceof Date ? dateInput : (dateInput?.toDate ? dateInput.toDate() : new Date(dateInput))) : new Date();
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+};
+
 export default function HistorialPedidos({ onEditar, user }) {
   const { notificar } = useUi();
-  const [todosLosPedidos, setTodosLosPedidos] = useState([]);
+  const [pedidos, setPedidos] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState('todos');
+  
+  // CORRECCIÓN: Inicializamos con la fecha local de Chile
   const [fechaFiltro, setFechaFiltro] = useState(getLocalISODate());
   
   const [pedidoParaCobrar, setPedidoParaCobrar] = useState(null);
@@ -48,13 +62,11 @@ export default function HistorialPedidos({ onEditar, user }) {
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-  // 1. Carga de datos cumpliendo la Regla 2 (Fetch simple y filtrar en memoria)
   useEffect(() => {
     if (!user) return;
     setCargando(true);
     
-    // Traemos la colección completa para filtrar localmente por fecha real
-    const q = query(collection(db, colOrdenes));
+    const q = query(collection(db, colOrdenes), where("fechaString", "==", fechaFiltro));
     
     const unsubscribe = onSnapshot(q, (snap) => {
       const docs = snap.docs.map(d => {
@@ -66,27 +78,15 @@ export default function HistorialPedidos({ onEditar, user }) {
           metodo_pago: data.metodo_pago || data.medioPago || "N/A"
         };
       });
-      setTodosLosPedidos(docs);
+      docs.sort((a, b) => (b.numero_pedido || 0) - (a.numero_pedido || 0));
+      setPedidos(docs);
       setCargando(false);
     }, (err) => {
       console.error("Error en historial:", err);
       setCargando(false);
     });
     return () => unsubscribe();
-  }, [user, colOrdenes]);
-
-  // 2. Filtrado y ordenado en memoria para asegurar fechas locales correctas
-  const pedidosFiltradosYOrdenados = useMemo(() => {
-    return todosLosPedidos
-      .filter(p => {
-        // CORRECCIÓN CLAVE: Calculamos el día local desde el Timestamp, no desde el string guardado
-        const diaPedido = getLocalISODate(p.fecha);
-        const coincideFecha = diaPedido === fechaFiltro;
-        const coincideEstado = filtroEstado === 'todos' || String(p.estado).toLowerCase() === filtroEstado.toLowerCase();
-        return coincideFecha && coincideEstado;
-      })
-      .sort((a, b) => (Number(b.numero_pedido) || 0) - (Number(a.numero_pedido) || 0));
-  }, [todosLosPedidos, fechaFiltro, filtroEstado]);
+  }, [user, colOrdenes, fechaFiltro]);
 
   const ejecutarImpresionAutomatica = (pedido) => {
     notificar(`Imprimiendo ticket orden #${pedido.numero_pedido}...`, "success");
@@ -101,8 +101,8 @@ export default function HistorialPedidos({ onEditar, user }) {
             direccion: pedido.direccion,
             telefono: pedido.telefono,
             descripcion: pedido.descripcion,
-            // Usamos la fecha real recalculada
-            fecha: getLocalISODate(pedido.fecha).split('-').reverse().join('/'),
+            notaPersonal: pedido.nota_personal || '',
+            fecha: pedido.fechaString ? pedido.fechaString.split('-').reverse().join('/') : getLocalISODate().split('-').reverse().join('/'),
             descuento: pedido.descuento || 0
         });
     } else {
@@ -169,7 +169,7 @@ export default function HistorialPedidos({ onEditar, user }) {
       setPedidoParaCobrar(null);
       setAplicarDescuento(false);
       notificar(`Pago anulado`, "success");
-    }).catch(err => console.error(err));
+    });
   };
 
   const confirmarPago = () => {
@@ -192,7 +192,6 @@ export default function HistorialPedidos({ onEditar, user }) {
     }
 
     setProcesandoPago(true);
-    
     updateDoc(doc(db, colOrdenes, p.id), {
       estado_pago: 'Pagado',
       metodo_pago: modoPago === 'unico' ? metodoUnico : 'Mixto',
@@ -216,10 +215,6 @@ export default function HistorialPedidos({ onEditar, user }) {
       notificar(`¡Pago registrado!`, "success");
       setPedidoParaCobrar(null);
       setAplicarDescuento(false);
-      setProcesandoPago(false);
-    }).catch(err => {
-      console.error(err);
-      notificar("Error al registrar pago", "error");
       setProcesandoPago(false);
     });
   };
@@ -261,10 +256,9 @@ export default function HistorialPedidos({ onEditar, user }) {
         <div className="py-20 text-center font-black text-slate-300 animate-pulse uppercase tracking-widest text-xs">Cargando datos...</div>
       ) : (
         <div className="grid gap-4 pb-32">
-          {pedidosFiltradosYOrdenados.length === 0 ? (
-            <div className="py-20 text-center text-slate-400 font-bold uppercase text-xs tracking-widest">No hay pedidos para este día</div>
-          ) : (
-            pedidosFiltradosYOrdenados.map(pedido => {
+          {pedidos
+            .filter(p => filtroEstado === 'todos' || String(p.estado).toLowerCase() === filtroEstado.toLowerCase())
+            .map(pedido => {
               const isPaid = String(pedido.estado_pago || '').toLowerCase() === 'pagado';
               const isDelivered = String(pedido.estado).toLowerCase() === 'entregado';
               
@@ -282,15 +276,18 @@ export default function HistorialPedidos({ onEditar, user }) {
                           </span>
                       </div>
                       <p className="text-[10px] text-slate-500 font-bold uppercase m-0 mt-1">
-                        {pedido.tipo_entrega} • {pedido.hora_pedido} • {getLocalISODate(pedido.fecha).split('-').reverse().join('/')}
+                        {pedido.tipo_entrega} • {pedido.hora_pedido} • {pedido.fechaString?.split('-').reverse().join('/')}
                       </p>
                       
                       <div className="mt-3 space-y-1 bg-slate-50 p-3 rounded-2xl border border-slate-100 max-w-md">
                         {pedido.items?.map((item, idx) => (
                             <div key={idx} className="flex justify-between items-center text-[10px] font-black uppercase text-slate-600">
-                                <div className="flex gap-2 items-center">
-                                    <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-900 w-8 text-center">{item.cantidad}x</span>
-                                    <span>{item.nombre}</span>
+                                <div className="flex flex-col">
+                                    <div className="flex gap-2 items-center">
+                                        <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-900 w-8 text-center">{item.cantidad}x</span>
+                                        <span>{item.nombre}</span>
+                                    </div>
+                                    {item.observacion && <span className="text-[8px] text-amber-600 ml-10 italic lowercase">↳ {item.observacion}</span>}
                                 </div>
                             </div>
                         ))}
@@ -310,6 +307,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                     <div className="flex gap-2">
                       <button onClick={() => ejecutarImpresionAutomatica(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Imprimir"><i className="bi bi-printer"></i></button>
                       <button onClick={() => onEditar(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil"></i></button>
+                      
                       <button onClick={() => handleEliminarPedido(pedido)} className="w-11 h-11 rounded-xl bg-red-50 text-red-500 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm"><i className="bi bi-trash3-fill"></i></button>
 
                       <button 
@@ -330,12 +328,10 @@ export default function HistorialPedidos({ onEditar, user }) {
                   </div>
                 </div>
               );
-            })
-          )}
+            })}
         </div>
       )}
 
-      {/* Modal de Cobro */}
       {pedidoParaCobrar && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[9999] flex items-center justify-center p-4">
           <div className="bg-white rounded-[3rem] shadow-2xl p-10 w-full max-w-md border border-white scale-in" onClick={e => e.stopPropagation()}>
@@ -438,18 +434,25 @@ export default function HistorialPedidos({ onEditar, user }) {
                 total={pedidoActivoParaImprimir.total_pagado || pedidoActivoParaImprimir.total} 
                 numeroPedido={pedidoActivoParaImprimir.numero_pedido} 
                 tipoEntrega={pedidoActivoParaImprimir.tipo_entrega} 
-                fecha={getLocalISODate(pedidoActivoParaImprimir.fecha)} 
+                fecha={pedidoActivoParaImprimir.fechaString?.split('-').reverse().join('/')} 
                 hora={pedidoActivoParaImprimir.hora_pedido} 
                 cliente={pedidoActivoParaImprimir.nombre_cliente} 
                 direccion={pedidoActivoParaImprimir.direccion}
                 telefono={pedidoActivoParaImprimir.telefono}
                 costoDespacho={pedidoActivoParaImprimir.costo_despacho}
                 descripcion={pedidoActivoParaImprimir.descripcion} 
+                notaPersonal={pedidoActivoParaImprimir.nota_personal || ''}
             />
         </div>
       )}
 
-      <style>{`.scale-in { animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1); } @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } } @media print { body * { visibility: hidden; } .print\\:block, .print\\:block * { visibility: visible; } .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; } }`}</style>
+      <style>{`
+        @media print { 
+            body * { visibility: hidden; } 
+            .print\\:block, .print\\:block * { visibility: visible; } 
+            .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; } 
+        }
+      `}</style>
     </div>
   );
 }
