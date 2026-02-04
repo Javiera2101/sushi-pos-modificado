@@ -11,8 +11,6 @@ import {
   where, 
   onSnapshot,
   getDocs,
-  orderBy,
-  limit,
   enableIndexedDbPersistence
 } from 'firebase/firestore';
 import { 
@@ -31,15 +29,17 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 const auth = getAuth(app);
 
-// Habilitar persistencia local para ahorrar lecturas (Caché en disco)
+// Habilitar persistencia local para modo offline
 try {
-    enableIndexedDbPersistence(db).catch((err) => {
-        if (err.code === 'failed-precondition') {
-            console.warn('La persistencia falló (múltiples pestañas abiertas)');
-        } else if (err.code === 'unimplemented') {
-            console.warn('El navegador no soporta persistencia');
-        }
-    });
+    if (typeof window !== 'undefined') {
+        enableIndexedDbPersistence(db).catch((err) => {
+            if (err.code === 'failed-precondition') {
+                console.warn('Persistencia falló: múltiples pestañas');
+            } else if (err.code === 'unimplemented') {
+                console.warn('Navegador no soporta persistencia');
+            }
+        });
+    }
 } catch (e) {}
 
 // --- DETECCIÓN DE ELECTRON ---
@@ -54,14 +54,13 @@ const ipcRenderer = (function() {
 })();
 
 // --- UTILIDADES DE FECHA LOCAL (CHILE) ---
-const getLocalISODate = (dateInput) => {
-  const d = dateInput ? (dateInput instanceof Date ? dateInput : (dateInput?.toDate ? dateInput.toDate() : new Date(dateInput))) : new Date();
+const getLocalISODate = () => {
   return new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'America/Santiago',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
-  }).format(d);
+  }).format(new Date());
 };
 
 // --- COMPONENTE TICKET ---
@@ -152,13 +151,14 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   
   const inputStyle = "w-full p-4 rounded-2xl border-2 border-gray-100 bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-black uppercase transition-all shadow-sm placeholder:text-gray-300";
 
+  // Autenticación
   useEffect(() => {
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else if (!auth.currentUser) {
-          await signInAnonymously(auth).catch(() => {});
+          await signInAnonymously(auth);
         }
       } catch (err) { console.error("Auth error:", err); }
     };
@@ -167,50 +167,67 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, []);
 
-  // ESCUCHA DE CAJA (Se mantiene onSnapshot porque es un solo documento)
+  // ESCUCHA DE CAJA (Apuntando a la raíz)
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, COL_CAJAS), where("estado", "==", "abierta"));
-    const unsubscribe = onSnapshot(q, (snap) => {
-        setCajaAbierta(!snap.empty);
-    }, (err) => console.error("Error Caja:", err));
+    const colRef = collection(db, COL_CAJAS);
+    
+    const unsubscribe = onSnapshot(colRef, (snap) => {
+        const docs = snap.docs.map(d => d.data());
+        const hayAbierta = docs.some(c => c.estado === "abierta");
+        setCajaAbierta(hayAbierta);
+    }, (err) => {
+        console.error("Error al verificar Caja en raíz:", err);
+        setCajaAbierta(false);
+    });
     return () => unsubscribe();
   }, [user, COL_CAJAS]);
 
-  // OPTIMIZACIÓN 1: Carga de Menú con getDocs (Lectura única al iniciar)
-  const cargarMenu = async () => {
+  // CARGA DE MENÚ (Apuntando a la raíz)
+  useEffect(() => {
     if (!user) return;
-    setCargando(true);
-    try {
-        const snap = await getDocs(collection(db, COL_MENU));
-        setMenu(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
-    } catch (e) { console.error("Error Menu:", e); }
-    finally { setCargando(false); }
-  };
+    const cargarMenu = async () => {
+        try {
+            const snap = await getDocs(collection(db, COL_MENU));
+            setMenu(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
+        } catch (e) { console.error("Error Menu en raíz:", e); }
+        finally { setCargando(false); }
+    };
+    cargarMenu();
+  }, [user]);
 
-  useEffect(() => { cargarMenu(); }, [user]);
-
-  // OPTIMIZACIÓN 2: Cálculo de Número de Pedido (Solo lee el último documento)
-  const calcularSiguienteNumero = async () => {
+  // CONTADOR DE PEDIDOS (Apuntando a la raíz + Cálculo en memoria para evitar errores)
+  useEffect(() => {
     if (!user || ordenAEditar) return;
+    
     const hoy = getLocalISODate();
-    const q = query(
-        collection(db, COL_ORDENES), 
-        where("fechaString", "==", hoy),
-        orderBy("numero_pedido", "desc"),
-        limit(1)
-    );
-    try {
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-            setNumeroPedidoVisual(Number(snap.docs[0].data().numero_pedido) + 1);
+    const colRef = collection(db, COL_ORDENES);
+    
+    const unsubscribe = onSnapshot(colRef, (snap) => {
+        const pedidosHoy = snap.docs
+            .map(d => d.data())
+            .filter(d => d.fechaString === hoy);
+
+        if (pedidosHoy.length > 0) {
+            // Buscamos el número más alto registrado hoy
+            const numeros = pedidosHoy.map(p => Number(p.numero_pedido) || 0);
+            const maxActual = Math.max(...numeros);
+            setNumeroPedidoVisual(maxActual + 1);
         } else {
             setNumeroPedidoVisual(1);
         }
-    } catch (e) { console.error("Error Numero Pedido:", e); }
-  };
-
-  useEffect(() => { calcularSiguienteNumero(); }, [user, ordenAEditar]);
+        
+        if (!ordenAEditar) {
+            setHoraPedido(new Date().toLocaleTimeString('es-CL', { 
+                hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' 
+            }));
+        }
+    }, (err) => {
+        console.error("Error sincronización contador en raíz:", err);
+    });
+    
+    return () => unsubscribe();
+  }, [user, ordenAEditar, COL_ORDENES]);
 
   // CARGA DE DATOS AL EDITAR
   useEffect(() => {
@@ -258,7 +275,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const enviarCocina = async () => {
     if (orden.length === 0) return;
     if (!cajaAbierta) {
-        alert("¡ERROR! Debe abrir la CAJA antes de tomar un pedido.");
+        alert("¡ATENCIÓN! Abra el turno en el módulo de CAJA para poder registrar pedidos.");
         return;
     }
 
@@ -283,24 +300,23 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     };
 
     try {
+        const colRef = collection(db, COL_ORDENES);
         if (ordenAEditar) {
-            updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos).catch(e => console.error(e));
+            await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
             if (onTerminarEdicion) onTerminarEdicion();
         } else {
-            addDoc(collection(db, COL_ORDENES), datos).catch(e => console.error(e));
+            await addDoc(colRef, datos);
             setNombreCliente(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); setCostoDespacho(''); setDescripcionGeneral('');
             setOrden([]);
-            // Recalculamos el número para la siguiente orden de forma proactiva
-            setNumeroPedidoVisual(prev => prev + 1);
         }
         ejecutarImpresion(datos);
     } catch (error) {
-        console.error("Error local al procesar orden:", error);
+        console.error("Error al procesar orden:", error);
     }
   };
 
   const agregarAlPedido = (p) => {
-    if (!cajaAbierta) { alert("¡ATENCIÓN! No puede agregar productos si la caja está cerrada."); return; }
+    if (!cajaAbierta) { alert("¡ATENCIÓN! No se pueden agregar productos porque el turno está cerrado."); return; }
     const existe = orden.find(item => item.id === p.id);
     if (existe) setOrden(prev => prev.map(item => item.id === p.id ? { ...item, cantidad: item.cantidad + 1 } : item));
     else setOrden(prev => [...prev, { ...p, cantidad: 1, observacion: '' }]);
@@ -320,7 +336,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   const categorias = [...new Set(menu.map(m => m.categoria))].filter(Boolean);
 
-  if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-300 animate-pulse bg-slate-50 italic tracking-widest">Sincronizando con Servidor...</div>;
+  if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-300 animate-pulse bg-slate-50 italic tracking-widest">Iniciando Isakari POS...</div>;
 
   return (
     <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative main-app-container">
@@ -345,7 +361,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
            {!cajaAbierta && (
                <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-center">
-                   <p className="text-[10px] font-black text-amber-600 uppercase m-0 tracking-tighter">⚠️ Debe abrir caja en la sección "CAJA" para continuar</p>
+                   <p className="text-[10px] font-black text-amber-600 uppercase m-0 tracking-tighter">⚠️ Debe abrir caja para comenzar a tomar pedidos</p>
                </div>
            )}
            
@@ -360,9 +376,10 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
              <div className="space-y-2 p-2.5 rounded-2xl border-2 border-orange-100 bg-orange-50/50 shadow-inner animate-in fade-in zoom-in-95 duration-200">
                <input type="text" placeholder="Dirección de entrega..." className={inputStyle + " border-orange-200"} value={direccion} onChange={e => setDireccion(e.target.value)} />
                <div className="flex gap-2">
-                 <input type="text" placeholder="Teléfono" className={inputStyle + " flex-1 border-orange-200"} value={telefono} onChange={e => setTelefono(e.target.value)} />
+                 <input type="text" placeholder="Tel" className={inputStyle + " flex-1 border-orange-200"} value={telefono} onChange={e => setTelefono(e.target.value)} />
                  <input type="number" placeholder="Envío" className={inputStyle + " border-orange-200 w-24 text-right"} value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
                </div>
+               <input type="text" placeholder="NOTA TICKET CLIENTE..." className={inputStyle + " border-blue-100"} value={notaPersonal} onChange={e => setNotaPersonal(e.target.value)} />
              </div>
            )}
            
@@ -372,7 +389,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
            </div>
 
            <textarea 
-             placeholder="OBSERVACIONES GENERALES (COCINA)..." 
+             placeholder="OBSERVACIONES PARA COCINA..." 
              className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner" 
              value={descripcionGeneral} 
              onChange={e => setDescripcionGeneral(e.target.value)} 
@@ -387,15 +404,13 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                     <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded-lg h-fit text-[10px]">{item.cantidad}x</span>
                 </div>
                 <div className="mt-2 flex gap-2 items-center">
-                    <div className="flex-1 relative group">
-                        <input 
-                            type="text"
-                            placeholder="Nota: sin queso..."
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner"
-                            value={item.observacion || ''}
-                            onChange={(e) => handleNotaItemChange(idx, e.target.value)}
-                        />
-                    </div>
+                    <input 
+                        type="text"
+                        placeholder="Nota item..."
+                        className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner"
+                        value={item.observacion || ''}
+                        onChange={(e) => handleNotaItemChange(idx, e.target.value)}
+                    />
                     <div className="flex items-center bg-slate-100 rounded-lg p-0.5 flex-shrink-0">
                         <button onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black">-</button>
                         <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded shadow-sm">{item.cantidad}</span>
@@ -409,9 +424,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       </aside>
 
       <main className="flex-1 p-8 overflow-y-auto bg-slate-50 custom-scrollbar no-print">
-        <div className="mb-4 flex justify-end">
-            <button onClick={cargarMenu} className="text-[9px] font-black uppercase text-slate-400 hover:text-red-600 transition-colors">Refrescar Menú 🔄</button>
-        </div>
         {!categoriaActual ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 animate-in slide-in-from-bottom-4 duration-300">
             {categorias.length > 0 ? categorias.map(cat => (
