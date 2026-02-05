@@ -4,7 +4,8 @@ import {
   getFirestore, 
   collection, 
   addDoc, 
-  updateDoc, 
+  updateDoc,
+  deleteDoc, 
   doc, 
   Timestamp, 
   query, 
@@ -19,6 +20,7 @@ import {
   signInWithCustomToken, 
   onAuthStateChanged 
 } from 'firebase/auth';
+import { useUi } from './context/UiContext'; // IMPORTACIÓN DEL CONTEXTO DE UI
 
 // --- CONFIGURACIÓN E INICIALIZACIÓN SEGURA DE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
@@ -123,6 +125,7 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
 
 // --- COMPONENTE PRINCIPAL ---
 export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: propUser }) {
+  const { notificar } = useUi(); // USO DEL HOOK DE NOTIFICACIONES
   const [user, setUser] = useState(propUser || null);
   const [menu, setMenu] = useState([]);
   const [orden, setOrden] = useState([]);
@@ -273,9 +276,14 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   };
 
   const enviarCocina = async () => {
-    if (orden.length === 0) return;
+    // VALIDACIÓN 1: PEDIDO VACÍO (Notificación Roja)
+    if (orden.length === 0) {
+        notificar("EL PEDIDO ESTÁ VACÍO. AGREGA PRODUCTOS ANTES DE CONFIRMAR.", "error");
+        return;
+    }
+    
     if (!cajaAbierta) {
-        alert("¡ATENCIÓN! Abra el turno en el módulo de CAJA para poder registrar pedidos.");
+        notificar("¡ATENCIÓN! ABRA EL TURNO EN CAJA PARA CONTINUAR.", "error");
         return;
     }
 
@@ -303,20 +311,27 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         const colRef = collection(db, COL_ORDENES);
         if (ordenAEditar) {
             await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
+            notificar(`PEDIDO #${datos.numero_pedido} ACTUALIZADO CORRECTAMENTE`, "success"); // Notificación Verde
             if (onTerminarEdicion) onTerminarEdicion();
         } else {
             await addDoc(colRef, datos);
+            notificar(`PEDIDO #${datos.numero_pedido} CREADO CORRECTAMENTE`, "success"); // Notificación Verde
             setNombreCliente(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); setCostoDespacho(''); setDescripcionGeneral('');
             setOrden([]);
         }
         ejecutarImpresion(datos);
     } catch (error) {
         console.error("Error al procesar orden:", error);
+        notificar("ERROR AL GUARDAR EL PEDIDO", "error");
     }
   };
 
+
   const agregarAlPedido = (p) => {
-    if (!cajaAbierta) { alert("¡ATENCIÓN! No se pueden agregar productos porque el turno está cerrado."); return; }
+    if (!cajaAbierta) { 
+        notificar("¡ATENCIÓN! CAJA CERRADA. ABRA TURNO PRIMERO.", "error"); 
+        return; 
+    }
     const existe = orden.find(item => item.id === p.id);
     if (existe) setOrden(prev => prev.map(item => item.id === p.id ? { ...item, cantidad: item.cantidad + 1 } : item));
     else setOrden(prev => [...prev, { ...p, cantidad: 1, observacion: '' }]);
@@ -348,6 +363,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                 <span className={`text-[10px] font-black uppercase tracking-widest ${tipoEntrega === 'LOCAL' ? 'text-red-600' : 'text-orange-600'}`}>{tipoEntrega}</span>
               </div>
               <div className="flex gap-2">
+                  
                   <button onClick={() => setMostrarVistaPrevia(true)} className="p-2 bg-white border border-gray-200 rounded-2xl text-gray-400 hover:text-red-600 shadow-sm transition-all">👁️</button>
                   <button 
                     onClick={enviarCocina} 
@@ -379,7 +395,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                  <input type="text" placeholder="Tel" className={inputStyle + " flex-1 border-orange-200"} value={telefono} onChange={e => setTelefono(e.target.value)} />
                  <input type="number" placeholder="Envío" className={inputStyle + " border-orange-200 w-24 text-right"} value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
                </div>
-               <input type="text" placeholder="NOTA TICKET CLIENTE..." className={inputStyle + " border-blue-100"} value={notaPersonal} onChange={e => setNotaPersonal(e.target.value)} />
              </div>
            )}
            
@@ -446,6 +461,12 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                   <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-4xl group-hover:scale-110 transition-transform shadow-inner">🍣</div>
                   <div className="flex flex-col items-center gap-2 w-full flex-1 justify-center mt-4">
                     <span className="font-black text-[13px] uppercase text-center text-slate-800 line-clamp-2 leading-tight px-1">{item.nombre}</span>
+                    {/* AÑADIDO: Descripción del producto */}
+                    {item.descripcion && (
+                      <span className="text-[10px] text-slate-600 text-center line-clamp-3 px-1 leading-tight lowercase first-letter:uppercase italic font-medium">
+                        {item.descripcion}
+                      </span>
+                    )}
                   </div>
                   <div className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs mt-3 shadow-lg group-hover:bg-red-700 transition-colors">
                     ${item.precio.toLocaleString('es-CL')}

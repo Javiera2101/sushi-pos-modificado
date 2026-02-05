@@ -7,7 +7,7 @@
   "description": "Sistema de Punto de Venta",
   "scripts": {
     "start": "npm run electron:dev",
-      "dev": "vite",
+    "dev": "vite",
     "build": "vite build",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "npm run build && electron-builder",
@@ -38,7 +38,8 @@
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
-    "vite": "^5.1.0"
+    "vite": "^5.1.0",
+    "wait-on": "^9.0.3"
   },
   "build": {
     "appId": "com.isakari.pos",

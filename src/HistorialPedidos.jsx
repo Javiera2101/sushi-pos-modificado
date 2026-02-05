@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
+  getFirestore,
   collection, 
   query, 
   where, 
@@ -13,9 +15,16 @@ import {
   orderBy,
   limit
 } from 'firebase/firestore';
-import { db } from './firebase'; // Corregido: ruta de importación
-import { useUi } from './context/UiContext'; // Corregido: ruta de importación
-import Ticket from './Ticket'; // Corregido: ruta de importación
+import { useUi } from './context/UiContext'; 
+import Ticket from './Ticket';
+
+// --- CONFIGURACIÓN E INICIALIZACIÓN SEGURA DE FIREBASE ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' 
+  ? JSON.parse(__firebase_config) 
+  : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
+
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const db = getFirestore(app);
 
 // --- DETECCIÓN DE ELECTRON ---
 const ipcRenderer = (function() {
@@ -233,6 +242,19 @@ export default function HistorialPedidos({ onEditar, user }) {
     notificar(`Pago anulado`, "success");
   };
 
+  // --- FUNCIÓN PARA ELIMINAR PEDIDO ---
+  const handleEliminarPedido = async (pedido) => {
+    if (!window.confirm(`¿ESTÁS SEGURO DE ELIMINAR EL PEDIDO #${pedido.numero_pedido}? ESTA ACCIÓN ES IRREVERSIBLE.`)) return;
+
+    try {
+      await deleteDoc(doc(db, colOrdenes, pedido.id));
+      notificar("Pedido eliminado correctamente", "success");
+    } catch (error) {
+      console.error("Error al eliminar:", error);
+      notificar("Error al eliminar el pedido", "error");
+    }
+  };
+
   return (
     <div className="p-6 h-full overflow-y-auto bg-slate-100 font-sans text-gray-800">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
@@ -329,6 +351,15 @@ export default function HistorialPedidos({ onEditar, user }) {
                     </div>
                     
                     <div className="flex gap-2">
+                      {/* BOTÓN ELIMINAR AGREGADO */}
+                      <button 
+                        onClick={() => handleEliminarPedido(pedido)} 
+                        className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm" 
+                        title="Eliminar"
+                      >
+                        <i className="bi bi-trash"></i>
+                      </button>
+
                       <button onClick={() => ejecutarImpresionAutomatica(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Imprimir"><i className="bi bi-printer"></i></button>
                       <button onClick={() => onEditar(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil"></i></button>
                       
