@@ -76,7 +76,7 @@ export default function HistorialPedidos({ onEditar, user }) {
   
   // Estados para el Cobro y Eliminación
   const [pedidoParaCobrar, setPedidoParaCobrar] = useState(null);
-  const [pedidoParaEliminar, setPedidoParaEliminar] = useState(null); // NUEVO ESTADO
+  const [pedidoParaEliminar, setPedidoParaEliminar] = useState(null); 
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [modoPago, setModoPago] = useState('unico'); 
   const [metodoUnico, setMetodoUnico] = useState('Efectivo');
@@ -93,19 +93,17 @@ export default function HistorialPedidos({ onEditar, user }) {
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-  // OPTIMIZACIÓN DE LECTURAS (TU CÓDIGO ORIGINAL MANTENIDO)
+  // OPTIMIZACIÓN DE LECTURAS (MANTENIDO)
   useEffect(() => {
     if (!user) return;
     setCargando(true);
     
     const hoy = getLocalISODate();
-    // Ruta corregida a raíz
     const q = query(collection(db, colOrdenes), where("fechaString", "==", fechaFiltro));
     
     let unsubscribe;
 
     if (fechaFiltro === hoy) {
-        // Escucha en tiempo real solo para hoy
         unsubscribe = onSnapshot(q, (snap) => {
             const docs = snap.docs.map(d => ({
                 id: d.id,
@@ -120,7 +118,6 @@ export default function HistorialPedidos({ onEditar, user }) {
             setCargando(false);
         });
     } else {
-        // Lectura única para el pasado
         getDocs(q).then((snap) => {
             const docs = snap.docs.map(d => ({
                 id: d.id,
@@ -164,7 +161,6 @@ export default function HistorialPedidos({ onEditar, user }) {
     }
   };
 
-  // --- FUNCIÓN DE ELIMINAR PEDIDO (Offline OK) ---
   const ejecutarEliminacion = async () => {
     if (!pedidoParaEliminar) return;
     try {
@@ -275,7 +271,6 @@ export default function HistorialPedidos({ onEditar, user }) {
     notificar(`PAGO ANULADO CORRECTAMENTE`, "success");
   };
 
-  // --- FUNCIÓN DE CAMBIO DE ESTADO CON NOTIFICACIÓN ---
   const toggleEstado = async (pedido) => {
     const nuevoEstado = pedido.estado === 'entregado' ? 'pendiente' : 'entregado';
     try {
@@ -364,6 +359,22 @@ export default function HistorialPedidos({ onEditar, user }) {
                             </div>
                         ))}
                       </div>
+
+                      {/* --- NOTAS GENERALES AÑADIDAS AQUÍ --- */}
+                      {pedido.descripcion && (
+                        <div className="mt-2 p-2.5 bg-amber-50 border border-amber-100 rounded-xl max-w-md">
+                            <span className="text-[8px] font-black text-amber-600 uppercase tracking-widest block mb-0.5">Observaciones de Cocina:</span>
+                            <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.descripcion}</p>
+                        </div>
+                      )}
+
+                      {/* NOTA DE REPARTO (SI EXISTE) */}
+                      {pedido.tipo_entrega === 'REPARTO' && pedido.nota_personal && (
+                         <div className="mt-2 p-2.5 bg-blue-50 border border-blue-100 rounded-xl max-w-md">
+                            <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-0.5">Nota de Reparto:</span>
+                            <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.nota_personal}</p>
+                         </div>
+                      )}
                     </div>
                   </div>
                   
@@ -380,7 +391,6 @@ export default function HistorialPedidos({ onEditar, user }) {
                       <button onClick={() => ejecutarImpresionAutomatica(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Imprimir"><i className="bi bi-printer"></i></button>
                       <button onClick={() => onEditar(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil"></i></button>
                       
-                      {/* BOTÓN ELIMINAR AÑADIDO AQUÍ */}
                       <button 
                         onClick={() => setPedidoParaEliminar(pedido)} 
                         className="w-11 h-11 rounded-xl bg-red-50 text-red-500 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm" 
