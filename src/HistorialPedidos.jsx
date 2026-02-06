@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
-  getFirestore,
+  getFirestore, 
   collection, 
   query, 
   where, 
@@ -13,8 +13,15 @@ import {
   deleteDoc,
   getDocs,
   orderBy,
-  limit
+  limit,
+  enableIndexedDbPersistence
 } from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged,
+  signInWithCustomToken
+} from 'firebase/auth';
 import { useUi } from './context/UiContext'; 
 import Ticket from './Ticket';
 
@@ -25,6 +32,18 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
+const auth = getAuth(app);
+const appIdRaw = typeof __app_id !== 'undefined' ? __app_id : 'sushi-pos-app';
+const appId = appIdRaw.replace(/\//g, '_'); 
+
+// Habilitar persistencia local para modo offline
+try {
+    if (typeof window !== 'undefined') {
+        enableIndexedDbPersistence(db).catch((err) => {
+            console.warn('Persistencia:', err.code);
+        });
+    }
+} catch (e) {}
 
 // --- DETECCIÓN DE ELECTRON ---
 const ipcRenderer = (function() {
@@ -55,8 +74,9 @@ export default function HistorialPedidos({ onEditar, user }) {
   const [filtroEstado, setFiltroEstado] = useState('todos');
   const [fechaFiltro, setFechaFiltro] = useState(getLocalISODate());
   
-  // Estados para el Cobro
+  // Estados para el Cobro y Eliminación
   const [pedidoParaCobrar, setPedidoParaCobrar] = useState(null);
+  const [pedidoParaEliminar, setPedidoParaEliminar] = useState(null); // NUEVO ESTADO
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [modoPago, setModoPago] = useState('unico'); 
   const [metodoUnico, setMetodoUnico] = useState('Efectivo');
@@ -73,12 +93,13 @@ export default function HistorialPedidos({ onEditar, user }) {
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-  // OPTIMIZACIÓN DE LECTURAS: 
+  // OPTIMIZACIÓN DE LECTURAS (TU CÓDIGO ORIGINAL MANTENIDO)
   useEffect(() => {
     if (!user) return;
     setCargando(true);
     
     const hoy = getLocalISODate();
+    // Ruta corregida a raíz
     const q = query(collection(db, colOrdenes), where("fechaString", "==", fechaFiltro));
     
     let unsubscribe;
@@ -143,6 +164,19 @@ export default function HistorialPedidos({ onEditar, user }) {
     }
   };
 
+  // --- FUNCIÓN DE ELIMINAR PEDIDO (Offline OK) ---
+  const ejecutarEliminacion = async () => {
+    if (!pedidoParaEliminar) return;
+    try {
+        await deleteDoc(doc(db, colOrdenes, pedidoParaEliminar.id));
+        notificar(`PEDIDO #${pedidoParaEliminar.numero_pedido} ELIMINADO CORRECTAMENTE`, "success");
+        setPedidoParaEliminar(null);
+    } catch (error) {
+        console.error(error);
+        notificar("ERROR AL ELIMINAR PEDIDO", "error");
+    }
+  };
+
   const toggleMetodoMixto = (metodo) => {
     const nuevoEstado = !metodosHabilitados[metodo];
     setMetodosHabilitados(prev => ({ ...prev, [metodo]: nuevoEstado }));
@@ -176,13 +210,12 @@ export default function HistorialPedidos({ onEditar, user }) {
     const totalIngresado = metodosFinales.reduce((acc, item) => acc + item.monto, 0);
     
     if (totalIngresado < totalACobrar) {
-      notificar(`Faltan ${formatPeso(totalACobrar - totalIngresado)}`, "error");
+      notificar(`FALTAN ${formatPeso(totalACobrar - totalIngresado)}`, "error");
       return;
     }
 
     setProcesandoPago(true);
 
-    // Optimización offline: No esperamos al servidor
     const pedidoRef = doc(db, colOrdenes, p.id);
     updateDoc(pedidoRef, {
       estado_pago: 'Pagado',
@@ -206,7 +239,7 @@ export default function HistorialPedidos({ onEditar, user }) {
       }).catch(err => console.error("Error sincronización movimiento:", err));
     });
 
-    notificar(`¡Pago registrado!`, "success");
+    notificar(`PAGO REGISTRADO CORRECTAMENTE`, "success");
     setPedidoParaCobrar(null);
     setAplicarDescuento(false);
     setProcesandoPago(false);
@@ -239,19 +272,21 @@ export default function HistorialPedidos({ onEditar, user }) {
 
     setPedidoParaCobrar(null);
     setAplicarDescuento(false);
-    notificar(`Pago anulado`, "success");
+    notificar(`PAGO ANULADO CORRECTAMENTE`, "success");
   };
 
-  // --- FUNCIÓN PARA ELIMINAR PEDIDO ---
-  const handleEliminarPedido = async (pedido) => {
-    if (!window.confirm(`¿ESTÁS SEGURO DE ELIMINAR EL PEDIDO #${pedido.numero_pedido}? ESTA ACCIÓN ES IRREVERSIBLE.`)) return;
-
+  // --- FUNCIÓN DE CAMBIO DE ESTADO CON NOTIFICACIÓN ---
+  const toggleEstado = async (pedido) => {
+    const nuevoEstado = pedido.estado === 'entregado' ? 'pendiente' : 'entregado';
     try {
-      await deleteDoc(doc(db, colOrdenes, pedido.id));
-      notificar("Pedido eliminado correctamente", "success");
-    } catch (error) {
-      console.error("Error al eliminar:", error);
-      notificar("Error al eliminar el pedido", "error");
+      await updateDoc(doc(db, colOrdenes, pedido.id), { estado: nuevoEstado });
+      const msg = nuevoEstado === 'entregado' 
+        ? `PEDIDO #${pedido.numero_pedido} ENTREGADO CORRECTAMENTE` 
+        : `PEDIDO #${pedido.numero_pedido} DEVUELTO A PENDIENTE CORRECTAMENTE`;
+      notificar(msg, "success");
+    } catch (e) {
+      console.error(e);
+      notificar("ERROR AL ACTUALIZAR ESTADO", "error");
     }
   };
 
@@ -301,7 +336,6 @@ export default function HistorialPedidos({ onEditar, user }) {
               return (
                 <div key={pedido.id} className={`p-6 rounded-[2.5rem] border-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between bg-white transition-all ${isDelivered ? 'border-emerald-500/20' : 'border-amber-400/20'}`}>
                   <div className="flex items-start gap-5 flex-1 min-w-0">
-                    {/* Fondo naranja sólido para que el número blanco sea legible */}
                     <div className={`w-14 h-14 rounded-2xl flex-shrink-0 flex items-center justify-center font-black text-white text-lg shadow-lg ${isDelivered ? 'bg-emerald-600' : 'bg-amber-500'}`}>
                       #{pedido.numero_pedido}
                     </div>
@@ -324,6 +358,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                                         <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-900 w-8 text-center">{item.cantidad}x</span>
                                         <span>{item.nombre}</span>
                                     </div>
+                                    {item.descripcion && <span className="text-[8px] text-slate-400 font-bold ml-10 italic lowercase">({item.descripcion})</span>}
                                     {item.observacion && <span className="text-[8px] text-blue-600 ml-10 italic lowercase">↳ {item.observacion}</span>}
                                 </div>
                             </div>
@@ -337,34 +372,25 @@ export default function HistorialPedidos({ onEditar, user }) {
                       <div className="text-2xl font-black text-slate-900">{formatPeso(pedido.total_pagado || pedido.total)}</div>
                       <div className={`text-[9px] font-black uppercase tracking-widest ${isPaid ? 'text-emerald-600' : 'text-rose-500'}`}>
                         {isPaid ? `PAGADO (${pedido.metodo_pago})` : 'PAGO PENDIENTE'}
-                        {pedido.descuento > 0 && <span className="ml-2 text-blue-500">-10% DESC.</span>}
+                        {pedido.descuento > 0 && <span className="ml-2 text-blue-500">-{formatPeso(pedido.descuento)}</span>}
                       </div>
-                      {isPaid && pedido.detalles_pago?.length > 0 && (
-                        <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 justify-start md:justify-end">
-                          {pedido.detalles_pago.map((dp, i) => (
-                            <span key={i} className="text-[7px] font-bold uppercase text-slate-400 bg-slate-50 px-1 rounded">
-                              {dp.metodo}: {formatPeso(dp.monto)}
-                            </span>
-                          ))}
-                        </div>
-                      )}
                     </div>
                     
                     <div className="flex gap-2">
-                      {/* BOTÓN ELIMINAR AGREGADO */}
-                      <button 
-                        onClick={() => handleEliminarPedido(pedido)} 
-                        className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm" 
-                        title="Eliminar"
-                      >
-                        <i className="bi bi-trash"></i>
-                      </button>
-
                       <button onClick={() => ejecutarImpresionAutomatica(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-900 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Imprimir"><i className="bi bi-printer"></i></button>
                       <button onClick={() => onEditar(pedido)} className="w-11 h-11 rounded-xl bg-slate-50 text-slate-400 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center shadow-sm" title="Editar"><i className="bi bi-pencil"></i></button>
                       
+                      {/* BOTÓN ELIMINAR AÑADIDO AQUÍ */}
                       <button 
-                        onClick={async () => await updateDoc(doc(db, colOrdenes, pedido.id), { estado: isDelivered ? 'pendiente' : 'entregado' })} 
+                        onClick={() => setPedidoParaEliminar(pedido)} 
+                        className="w-11 h-11 rounded-xl bg-red-50 text-red-500 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center shadow-sm" 
+                        title="Eliminar"
+                      >
+                        <i className="bi bi-trash3"></i>
+                      </button>
+
+                      <button 
+                        onClick={() => toggleEstado(pedido)} 
                         className={`px-4 h-11 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${isDelivered ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-amber-600 border-amber-200'}`}
                       >
                         {isDelivered ? 'Listo' : 'Entregar'}
@@ -374,6 +400,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                         setPedidoParaCobrar(pedido);
                         setModoPago('unico');
                         setAplicarDescuento(false);
+                        setMontosMixtos({ Efectivo: '', Transferencia: '', Débito: '' });
                       }} className={`px-5 h-11 rounded-xl text-[10px] font-black uppercase shadow-lg active:scale-95 transition-all ${isPaid ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-900 text-white'}`}>
                         {isPaid ? 'Pago' : 'Cobrar'}
                       </button>
@@ -382,6 +409,35 @@ export default function HistorialPedidos({ onEditar, user }) {
                 </div>
               );
             })}
+        </div>
+      )}
+
+      {/* MODAL DE ELIMINACIÓN */}
+      {pedidoParaEliminar && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-[3rem] shadow-2xl p-10 w-full max-w-sm border border-white text-center scale-in">
+            <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6 border-2 border-red-100 shadow-inner">
+                <i className="bi bi-exclamation-triangle-fill text-3xl"></i>
+            </div>
+            <h3 className="font-black uppercase text-xl text-slate-900 m-0 tracking-tighter">¿Eliminar Pedido?</h3>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-4 leading-tight">
+                ESTA ACCIÓN BORRARÁ EL PEDIDO #{pedidoParaEliminar.numero_pedido} DEFINITIVAMENTE.
+            </p>
+            <div className="flex gap-4 mt-8">
+                <button 
+                  onClick={() => setPedidoParaEliminar(null)} 
+                  className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-50 rounded-2xl transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={ejecutarEliminacion} 
+                  className="flex-[2] py-4 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl shadow-red-200 hover:bg-red-700 active:scale-95 transition-all"
+                >
+                  Sí, Eliminar
+                </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -427,15 +483,16 @@ export default function HistorialPedidos({ onEditar, user }) {
                 </button>
             </div>
 
+            {/* OPCIONES DE PAGO DISTRIBUIDAS 1x3 PARA AMBOS MODOS */}
             {modoPago === 'unico' ? (
-                <div className="grid grid-cols-2 gap-2 mb-8">
+                <div className="grid grid-cols-3 gap-2 mb-8">
                     {['Efectivo', 'Transferencia', 'Débito'].map(m => (
-                        <button key={m} onClick={() => setMetodoUnico(m)} className={`py-4 rounded-2xl font-black text-[11px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}>{m}</button>
+                        <button key={m} onClick={() => setMetodoUnico(m)} className={`py-4 rounded-2xl font-black text-[10px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}>{m}</button>
                     ))}
                 </div>
             ) : (
                 <div className="space-y-4 mb-8">
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-2">
                         {['Efectivo', 'Transferencia', 'Débito'].map(m => (
                             <div key={m} className="flex flex-col gap-2">
                                 <button 
@@ -447,7 +504,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                                 <input 
                                   type="text" 
                                   disabled={!metodosHabilitados[m]} 
-                                  className="w-full p-3 bg-slate-50 rounded-xl border-2 border-slate-100 outline-none text-right font-black text-xs focus:border-blue-400 disabled:opacity-30" 
+                                  className="w-full p-2 bg-slate-50 rounded-xl border-2 border-slate-100 outline-none text-right font-black text-[10px] focus:border-blue-400 disabled:opacity-30" 
                                   placeholder="0" 
                                   value={montosMixtos[m]} 
                                   onChange={(e) => setMontosMixtos(prev => ({...prev, [m]: formatInput(e.target.value)}))} 
@@ -466,7 +523,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                 </button>
               </div>
               
-              {String(pedidoParaCobrar.estado_pago).toLowerCase() === 'pagado' && (
+              {pedidoParaCobrar && String(pedidoParaCobrar.estado_pago).toLowerCase() === 'pagado' && (
                 <button 
                   onClick={handleAnularPago} 
                   disabled={procesandoPago}
@@ -496,6 +553,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                 costoDespacho={pedidoActivoParaImprimir.costo_despacho}
                 descripcion={pedidoActivoParaImprimir.descripcion} 
                 notaPersonal={pedidoActivoParaImprimir.nota_personal || ''}
+                descuento={pedidoActivoParaImprimir.descuento || 0}
             />
         </div>
       )}
@@ -504,7 +562,7 @@ export default function HistorialPedidos({ onEditar, user }) {
         @media print { 
             body * { visibility: hidden; } 
             .print\\:block, .print\\:block * { visibility: visible; } 
-            .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; } 
+            .print\\:block { position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: white; z-index: 10000; } 
         }
         .scale-in { animation: scaleIn 0.2s ease-out; }
         @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
