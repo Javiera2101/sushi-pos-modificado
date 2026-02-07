@@ -332,7 +332,7 @@ export default function App({ user: initialUser }) {
                 ['Total Envíos', formatoPeso(data.total_envios)], 
                 ['Gastos Totales', formatoPeso(data.total_gastos)], 
                 ['Ganancia Real', formatoPeso(data.total_ganancia)], 
-                ['EFECTIVO EN GAVETA', formatoPeso(data.monto_cierre_sistema)]
+                ['EFECTIVO EN CAJA', formatoPeso(data.monto_cierre_sistema)]
             ],
             theme: 'striped',
             headStyles: { fillColor: [44, 62, 80] }
@@ -455,7 +455,7 @@ export default function App({ user: initialUser }) {
                             </div>
                             
                             <div className="bg-slate-900 p-6 rounded-[2rem] shadow-xl text-white border-2 border-emerald-500/30 text-center">
-                                <span className="text-[10px] font-black uppercase opacity-60 tracking-[0.3em] mb-1 block">EFECTIVO FÍSICO EN GAVETA</span>
+                                <span className="text-[10px] font-black uppercase opacity-60 tracking-[0.3em] mb-1 block">EFECTIVO FÍSICO EN CAJA</span>
                                 <div className="text-4xl font-black tracking-tighter">{formatoPeso(efectivoEnCajon)}</div>
                              </div>
 
@@ -515,7 +515,7 @@ export default function App({ user: initialUser }) {
                                             <div className="font-black text-emerald-600 text-sm">{formatoPeso(c.total_ventas_netas)}</div>
                                         </div>
                                         <div className="text-right">
-                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">GAVETA</div>
+                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">CAJA</div>
                                             <div className="font-black text-slate-900 text-sm">{formatoPeso(c.monto_cierre_sistema)}</div>
                                         </div>
                                         <div className="flex gap-2 ml-4">
