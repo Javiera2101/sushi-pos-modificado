@@ -5,7 +5,7 @@ import { auth } from './firebase.js';
 // Contexto: Importamos useUi para saber el estado de la conexión
 import { UiProvider, useUi } from './context/UiContext.jsx';
 
-// Importación de Componentes
+// Importación de Componentes Reales
 import TomarPedido from './TomarPedido.jsx';
 import HistorialPedidos from './HistorialPedidos.jsx';
 import Caja from './Caja.jsx';
@@ -93,6 +93,9 @@ const AppContent = () => {
   
   const { isOnline } = useUi();
 
+  // Detectamos si el usuario actual es el de pruebas para mostrar el indicador
+  const esPrueba = user?.email === "prueba@isakari.com";
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (usuario) => {
       setUser(usuario);
@@ -131,12 +134,21 @@ const AppContent = () => {
             <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">I</div>
             <span className="text-white font-black tracking-tighter text-xl">ISAKARI <span className="text-red-600">POS</span></span>
             
+            {/* BADGE DE CONEXIÓN */}
             <div className={`ml-4 flex items-center gap-2 px-3 py-1 rounded-full border transition-colors ${isOnline ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400 animate-pulse'}`}>
                 <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
                 <span className="text-[9px] font-black uppercase tracking-widest">
                     {isOnline ? 'ONLINE' : 'OFFLINE'}
                 </span>
             </div>
+
+            {/* INDICADOR DE MODO PRUEBA (Muestra badge si es el usuario de prueba) */}
+            {esPrueba && (
+              <div className="ml-2 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600 text-white animate-pulse shadow-lg shadow-red-900/40 border border-red-500">
+                <i className="bi bi-shield-lock-fill text-[10px]"></i>
+                <span className="text-[9px] font-black uppercase tracking-widest">MODO PRUEBA</span>
+              </div>
+            )}
         </div>
         
         {/* MENU DE NAVEGACIÓN */}
@@ -202,7 +214,7 @@ const AppContent = () => {
         )}
 
         {seccion === 'PRODUCTOS' && (
-          <GestionProductos />
+          <GestionProductos user={user} />
         )}
       </div>
 

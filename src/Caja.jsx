@@ -22,7 +22,7 @@ import {
   enableIndexedDbPersistence
 } from 'firebase/firestore';
 
-// --- CONFIGURACIÓN E INICIALIZACIÓN DE FIREBASE (AUTÓNOMA) ---
+// --- CONFIGURACIÓN E INICIALIZACIÓN DE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
@@ -65,7 +65,6 @@ const obtenerFechaReal = (timestamp, fechaStringFallback) => {
 };
 
 export default function App({ user: initialUser }) {
-    // --- SISTEMA DE NOTIFICACIONES LOCAL (REEMPLAZA UiContext) ---
     const [notificacion, setNotificacion] = useState(null);
     const notificar = (msg, tipo = 'success') => {
         setNotificacion({ msg, tipo });
@@ -73,21 +72,17 @@ export default function App({ user: initialUser }) {
     };
 
     const [user, setUser] = useState(initialUser || null);
-    
-    // Estados UI
     const [vista, setVista] = useState('actual'); 
     const [filtroFechaHistorial, setFiltroFechaHistorial] = useState(''); 
     const [cargando, setCargando] = useState(true);
     const [libsReady, setLibsReady] = useState(false);
 
-    // Estados Caja
     const [idCajaAbierta, setIdCajaAbierta] = useState(null);
     const [montoApertura, setMontoApertura] = useState(0);
     const [montoAperturaInput, setMontoAperturaInput] = useState('');
     const [fechaInicioCaja, setFechaInicioCaja] = useState(getFechaChile()); 
     const [procesandoApertura, setProcesandoApertura] = useState(false);
 
-    // Totales
     const [totalBrutoRecaudado, setTotalBrutoRecaudado] = useState(0); 
     const [totalVentasNetas, setTotalVentasNetas] = useState(0);     
     const [totalEnvios, setTotalEnvios] = useState(0);       
@@ -104,7 +99,6 @@ export default function App({ user: initialUser }) {
     const [cajasAnteriores, setCajasAnteriores] = useState([]);
     const [ordenesNoPagadasHoy, setOrdenesNoPagadasHoy] = useState([]); 
 
-    // Lógica de colecciones (APUNTANDO A RAÍZ SEGÚN REQUERIMIENTO PREVIO)
     const esPrueba = user?.email === "prueba@isakari.com";
     const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
     const COL_GASTOS = esPrueba ? "gastos_pruebas" : "gastos";
@@ -115,7 +109,6 @@ export default function App({ user: initialUser }) {
         return num.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
     };
 
-    // Autenticación
     useEffect(() => {
         const initAuth = async () => {
             try {
@@ -131,7 +124,6 @@ export default function App({ user: initialUser }) {
         return () => unsubscribe();
     }, []);
 
-    // Cargar librerías PDF
     useEffect(() => {
         const scripts = [
             { id: 'jspdf-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js' },
@@ -147,7 +139,6 @@ export default function App({ user: initialUser }) {
         Promise.all(scripts.map(loadScript)).then(() => setLibsReady(true));
     }, []);
 
-    // Escuchar Cajas
     useEffect(() => {
         if (!user) return;
         const boxesRef = collection(db, COL_CAJAS);
@@ -159,24 +150,18 @@ export default function App({ user: initialUser }) {
             if (abierta) {
                 setMontoApertura(Number(abierta.monto_apertura) || 0);
                 setIdCajaAbierta(abierta.id);
-                const fechaCaja = obtenerFechaReal(abierta.fecha_apertura, abierta.fechaString);
-                setFechaInicioCaja(fechaCaja);
+                setFechaInicioCaja(obtenerFechaReal(abierta.fecha_apertura, abierta.fechaString));
             } else {
                 setMontoApertura(0);
                 setIdCajaAbierta(null);
                 setFechaInicioCaja(getFechaChile());
             }
-            const cerradas = docs.filter(c => c.estado === "cerrada");
-            setCajasAnteriores(cerradas);
+            setCajasAnteriores(docs.filter(c => c.estado === "cerrada"));
             setCargando(false);
-        }, (err) => {
-            console.error("Error al cargar cajas:", err);
-            setCargando(false);
-        });
+        }, (err) => setCargando(false));
         return () => unsub();
     }, [user, COL_CAJAS]);
 
-    // Escuchar Ventas y Gastos
     useEffect(() => {
         if (!user) return;
         
@@ -189,63 +174,48 @@ export default function App({ user: initialUser }) {
             
             snap.docs.forEach(docSnap => {
                 const raw = docSnap.data();
-                const d = { 
-                    id: docSnap.id, 
-                    ...raw,
-                    fechaDisplay: obtenerFechaReal(raw.fecha, raw.fechaString),
-                    estado_pago: String(raw.estado_pago || "Pendiente").trim(),
-                    metodo_pago: raw.metodo_pago || "N/A",
-                    total: Number(raw.total_pagado || raw.total || 0),
-                    costo_despacho: Number(raw.costo_despacho || 0),
-                    estado_entrega: String(raw.estado || "pendiente").toLowerCase(),
-                    items: raw.items || []
-                };
+                const d = { id: docSnap.id, ...raw };
+                const isPaid = String(raw.estado_pago || "").toLowerCase() === 'pagado';
 
-                const isPaid = d.estado_pago.toLowerCase() === 'pagado';
-                const isDelivered = d.estado_entrega === 'entregado';
-                
-                if (idCajaAbierta) {
-                    if (isPaid) {
-                        const detalles = d.detalles_pago || [{ metodo: d.metodo_pago, monto: d.total }];
-                        detalles.forEach(p => {
-                            const m = Number(p.monto) || 0;
-                            const met = String(p.metodo || '').toLowerCase();
-                            if (met.includes('efectivo')) sEfec += m;
-                            else if (met.includes('transferencia')) sTrans += m;
-                            else sDeb += m; 
-                        });
-
-                        if (isDelivered) {
-                            actuales.push(d);
-                            recaudado += d.total;
-                            tEnv += d.costo_despacho;
-                        } else {
-                            actuales.push({ ...d, info: "PAGADO - PENDIENTE" });
-                        }
-                    } else {
-                        pendientes.push(d);
-                    }
+                if (isPaid) {
+                    const detalles = d.detalles_pago || [{ metodo: d.metodo_pago, monto: d.total_pagado || d.total }];
+                    detalles.forEach(p => {
+                        const m = Number(p.monto) || 0;
+                        const met = String(p.metodo || '').toLowerCase();
+                        if (met.includes('efectivo')) sEfec += m;
+                        else if (met.includes('transferencia')) sTrans += m;
+                        else sDeb += m; 
+                    });
+                    actuales.push(d);
+                    recaudado += (Number(d.total_pagado) || Number(d.total) || 0);
+                    tEnv += (Number(d.costo_despacho) || 0);
+                } else {
+                    pendientes.push(d);
                 }
             });
 
-            setListaVentas(actuales.sort((a,b) => (a.numero_pedido || 0) - (b.numero_pedido || 0)));
-            setOrdenesNoPagadasHoy(pendientes);
-            setTotalBrutoRecaudado(recaudado);
-            setTotalEnvios(tEnv);
-            setEfectivoRecaudadoTotal(sEfec); 
-            setTransferencia(sTrans);
-            setDebito(sDeb);
+            if (idCajaAbierta) {
+                setListaVentas(actuales.sort((a,b) => (a.numero_pedido || 0) - (b.numero_pedido || 0)));
+                setOrdenesNoPagadasHoy(pendientes);
+                setTotalBrutoRecaudado(recaudado);
+                setTotalEnvios(tEnv);
+                setEfectivoRecaudadoTotal(sEfec); 
+                setTransferencia(sTrans);
+                setDebito(sDeb);
+            }
         });
 
         const expensesRef = collection(db, COL_GASTOS);
         const qGastos = query(expensesRef, where("fechaString", "==", fechaInicioCaja));
 
         const unsubGastos = onSnapshot(qGastos, (snap) => {
-            if (!idCajaAbierta) { setListaGastos([]); setTotalGastos(0); return; }
-            const turno = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-            setListaGastos(turno);
-            setTotalGastos(turno.reduce((sum, i) => sum + (Number(i.monto)||0), 0));
+            if (idCajaAbierta) {
+                const turno = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+                setListaGastos(turno);
+                setTotalGastos(turno.reduce((sum, i) => sum + (Number(i.monto)||0), 0));
+            }
         });
+
         return () => { unsubVentas(); unsubGastos(); };
     }, [user, idCajaAbierta, fechaInicioCaja, COL_ORDENES, COL_GASTOS]);
 
@@ -256,61 +226,42 @@ export default function App({ user: initialUser }) {
         setEfectivoEnCajon((montoApertura + efectivoRecaudadoTotal) - totalGastos);
     }, [totalBrutoRecaudado, totalEnvios, totalGastos, montoApertura, efectivoRecaudadoTotal]);
 
-    // --- FUNCIÓN DE EXPORTACIÓN PDF CON BÚSQUEDA PROFUNDA DE DETALLES ---
     const handleExportarPDF = async (cajaData = null) => {
         if (!libsReady) {
             notificar("Librerías PDF cargando...", "error");
             return;
         }
 
-        notificar("Generando reporte con detalles...", "info");
+        notificar("Generando reporte...", "info");
 
         const targetFecha = cajaData ? cajaData.fechaString : fechaInicioCaja;
         const data = cajaData || { 
-            fechaString: targetFecha, total_ventas: totalBrutoRecaudado, 
+            fechaString: targetFecha, total_ventas_netas: totalVentasNetas,
             total_envios: totalEnvios, total_gastos: totalGastos, 
             total_ganancia: gananciaReal, monto_cierre_sistema: efectivoEnCajon, 
-            monto_apertura: montoApertura, total_ventas_netas: totalVentasNetas,
-            total_efectivo: efectivoRecaudadoTotal, total_transferencia: transferencia, total_debito: debito
+            monto_apertura: montoApertura, total_efectivo: efectivoRecaudadoTotal,
+            total_transferencia: transferencia, total_debito: debito
         };
 
         let rawMovs = [];
+        let rawGastos = [];
 
         try {
-            // Buscamos órdenes reales para reconstruir el detalle si falta
-            const ordersRef = collection(db, COL_ORDENES);
-            const q = query(ordersRef, where("fechaString", "==", targetFecha));
-            const snap = await getDocs(q);
-            
-            rawMovs = snap.docs
+            const qOrders = query(collection(db, COL_ORDENES), where("fechaString", "==", targetFecha));
+            const snapOrders = await getDocs(qOrders);
+            rawMovs = snapOrders.docs
                 .map(d => ({ id: d.id, ...d.data() }))
-                .filter(v => String(v.estado_pago || "").trim().toLowerCase() === 'pagado')
+                .filter(o => String(o.estado_pago).toLowerCase() === 'pagado')
                 .sort((a, b) => (a.numero_pedido || 0) - (b.numero_pedido || 0));
 
-            if (rawMovs.length === 0 && cajaData && cajaData.movimientos_cierre) {
-                rawMovs = cajaData.movimientos_cierre;
-            }
+            const qExpenses = query(collection(db, COL_GASTOS), where("fechaString", "==", targetFecha));
+            const snapExpenses = await getDocs(qExpenses);
+            rawGastos = snapExpenses.docs.map(d => ({ id: d.id, ...d.data() }));
+
         } catch (err) {
-            if (cajaData?.movimientos_cierre) rawMovs = cajaData.movimientos_cierre;
-            else rawMovs = listaVentas; 
+            rawMovs = listaVentas;
+            rawGastos = listaGastos;
         }
-
-        const tableBodyData = rawMovs.map(v => {
-             const items = v.items || [];
-             let detalleStr = items.length > 0 
-                ? items.map(i => `${i.cantidad} X ${i.nombre}`).join('\n')
-                : (v.detalle || '-');
-
-             return [
-                v.numero_pedido || v.numero || '-',
-                (v.nombre_cliente || v.cliente || 'CLIENTE').toUpperCase(),
-                detalleStr,
-                v.tipo_entrega || v.tipo || 'LOCAL',
-                formatoPeso(v.costo_despacho !== undefined ? v.costo_despacho : (v.envio || 0)),
-                formatoPeso(v.total_pagado || v.total || 0),
-                v.metodo_pago || v.pago || 'N/A'
-             ];
-        });
 
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF();
@@ -318,9 +269,7 @@ export default function App({ user: initialUser }) {
         pdf.setFontSize(16);
         pdf.setFont("helvetica", "bold");
         pdf.text("ISAKARI SUSHI - REPORTE DE CAJA", 105, 15, { align: 'center' });
-        
         pdf.setFontSize(10);
-        pdf.setFont("helvetica", "normal");
         pdf.text(`Fecha Reporte: ${data.fechaString}`, 15, 25);
 
         pdf.autoTable({ 
@@ -351,18 +300,40 @@ export default function App({ user: initialUser }) {
         });
 
         pdf.setFontSize(12);
-        pdf.setFont("helvetica", "bold");
         pdf.text("DETALLE DE MOVIMIENTOS", 15, pdf.lastAutoTable.finalY + 15);
-
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 20,
-            head: [['N°', 'Cliente', 'Detalle', 'Tipo', 'Envio', 'Total', 'Pago']],
-            body: tableBodyData,
+            head: [['N°', 'Cliente', 'Detalle', 'Tipo', 'Total', 'Pago']],
+            body: rawMovs.map(v => [
+                v.numero_pedido || '-',
+                (v.nombre_cliente || 'CLIENTE').toUpperCase(),
+                (v.items || []).map(i => `${i.cantidad} X ${i.nombre}`).join('\n'),
+                v.tipo_entrega || 'LOCAL',
+                formatoPeso(v.total_pagado || v.total),
+                v.metodo_pago
+            ]),
             theme: 'grid',
             headStyles: { fillColor: [44, 62, 80] },
-            styles: { fontSize: 6.5, cellPadding: 1.5, valign: 'middle', overflow: 'linebreak' },
+            styles: { fontSize: 6.5, valign: 'middle', overflow: 'linebreak' },
             columnStyles: { 2: { cellWidth: 55 } }
         });
+
+        if (rawGastos.length > 0) {
+            pdf.setFontSize(12);
+            pdf.text("DETALLE DE GASTOS", 15, pdf.lastAutoTable.finalY + 15);
+            pdf.autoTable({
+                startY: pdf.lastAutoTable.finalY + 20,
+                head: [['Descripción', 'Categoría', 'Monto']],
+                body: rawGastos.map(g => [
+                    (g.descripcion || '').toUpperCase(),
+                    (g.categoria || 'GENERAL').toUpperCase(),
+                    formatoPeso(g.monto)
+                ]),
+                theme: 'grid',
+                headStyles: { fillColor: [192, 57, 43] },
+                styles: { fontSize: 8 }
+            });
+        }
 
         pdf.save(`Reporte_Caja_${data.fechaString}.pdf`);
     };
@@ -384,11 +355,7 @@ export default function App({ user: initialUser }) {
 
     const handleCerrarCaja = async () => {
         if (!idCajaAbierta) return;
-        if (ordenesNoPagadasHoy.length > 0) {
-            if(!window.confirm(`ADVERTENCIA: Hay ${ordenesNoPagadasHoy.length} pedidos SIN PAGAR. ¿Cerrar turno?`)) return;
-        }
         if (!window.confirm("¿Confirma el cierre del turno actual?")) return;
-
         try {
             await updateDoc(doc(db, COL_CAJAS, idCajaAbierta), { 
                 estado: "cerrada", fecha_cierre: Timestamp.now(), 
@@ -396,16 +363,7 @@ export default function App({ user: initialUser }) {
                 total_ventas: totalBrutoRecaudado, total_ventas_netas: totalVentasNetas,
                 total_envios: totalEnvios, total_gastos: totalGastos, 
                 total_ganancia: gananciaReal, monto_apertura: montoApertura,
-                total_efectivo: efectivoRecaudadoTotal, total_transferencia: transferencia, total_debito: debito,
-                movimientos_cierre: listaVentas.map(v => ({
-                    numero: v.numero_pedido || '-',
-                    cliente: v.nombre_cliente || 'CLIENTE',
-                    items: v.items || [],
-                    tipo: v.tipo_entrega || 'LOCAL',
-                    envio: v.costo_despacho || 0,
-                    total: v.total || 0,
-                    pago: v.metodo_pago || 'N/A'
-                }))
+                total_efectivo: efectivoRecaudadoTotal, total_transferencia: transferencia, total_debito: debito
             });
             notificar("Caja cerrada exitosamente");
         } catch (e) { notificar("Error al cerrar", "error"); }
@@ -465,20 +423,35 @@ export default function App({ user: initialUser }) {
                                 <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-sm"><span className="text-[8px] font-black uppercase text-slate-400 block mb-1">Tarjetas (Déb/Créd)</span><div className="text-lg font-black text-purple-600">{formatoPeso(debito)}</div></div>
                             </div>
 
-                            <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-sm">
-                                <div className="p-3 border-b bg-slate-50 font-black uppercase text-[10px] tracking-wider text-slate-500">Últimas Ventas Pagadas</div>
-                                <div className="flex-1 overflow-y-auto p-3 space-y-2 max-h-[400px]">
-                                    {listaVentas.map(v => (
-                                        <div key={v.id} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                                            <div className="max-w-[70%]">
-                                                <div className="text-[10px] font-black uppercase truncate">#{v.numero_pedido} {v.nombre_cliente}</div>
-                                                <div className="flex gap-1.5 mt-0.5">
-                                                    <span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase">{v.metodo_pago}</span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-sm h-[400px]">
+                                    <div className="p-3 border-b bg-slate-50 font-black uppercase text-[10px] tracking-wider text-slate-500">Ventas Pagadas</div>
+                                    <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                                        {listaVentas.map(v => (
+                                            <div key={v.id} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                <div className="max-w-[70%]">
+                                                    <div className="text-[10px] font-black uppercase truncate">#{v.numero_pedido} {v.nombre_cliente}</div>
+                                                    <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase">{v.metodo_pago}</span></div>
                                                 </div>
+                                                <div className="text-right text-[11px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
                                             </div>
-                                            <div className="text-right text-[11px] font-black text-slate-900">{formatoPeso(v.total)}</div>
-                                        </div>
-                                    ))}
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-sm h-[400px]">
+                                    <div className="p-3 border-b bg-rose-50 font-black uppercase text-[10px] tracking-wider text-rose-500">Egresos del Turno</div>
+                                    <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                                        {listaGastos.map(g => (
+                                            <div key={g.id} className="flex justify-between items-center p-2.5 bg-rose-50/30 rounded-xl border border-rose-100">
+                                                <div className="max-w-[70%]">
+                                                    <div className="text-[10px] font-black uppercase truncate">{g.descripcion}</div>
+                                                    <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-rose-600 font-bold bg-rose-50 px-1 rounded uppercase">{g.categoria}</span></div>
+                                                </div>
+                                                <div className="text-right text-[11px] font-black text-rose-700">-{formatoPeso(g.monto)}</div>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -496,8 +469,8 @@ export default function App({ user: initialUser }) {
                                         <div className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">{c.usuario_email}</div>
                                     </div>
                                     
-                                    {/* MÉTODOS DE PAGO DESGLOSADOS CON EL MISMO FORMATO SOLICITADO */}
                                     <div className="flex items-center gap-6">
+                                        {/* UNIFICACIÓN VISUAL DE DESGLOSE DE PAGOS SOLICITADA */}
                                         <div className="text-right">
                                             <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">EFECTIVO</div>
                                             <div className="font-black text-slate-600 text-sm">{formatoPeso(c.total_efectivo || 0)}</div>
