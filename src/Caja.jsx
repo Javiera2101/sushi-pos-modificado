@@ -150,7 +150,8 @@ export default function App({ user: initialUser }) {
             if (abierta) {
                 setMontoApertura(Number(abierta.monto_apertura) || 0);
                 setIdCajaAbierta(abierta.id);
-                setFechaInicioCaja(obtenerFechaReal(abierta.fecha_apertura, abierta.fechaString));
+                const fechaCaja = obtenerFechaReal(abierta.fecha_apertura, abierta.fechaString);
+                setFechaInicioCaja(fechaCaja);
             } else {
                 setMontoApertura(0);
                 setIdCajaAbierta(null);
@@ -247,6 +248,7 @@ export default function App({ user: initialUser }) {
         let rawGastos = [];
 
         try {
+            // Búsqueda profunda de Órdenes
             const qOrders = query(collection(db, COL_ORDENES), where("fechaString", "==", targetFecha));
             const snapOrders = await getDocs(qOrders);
             rawMovs = snapOrders.docs
@@ -254,11 +256,17 @@ export default function App({ user: initialUser }) {
                 .filter(o => String(o.estado_pago).toLowerCase() === 'pagado')
                 .sort((a, b) => (a.numero_pedido || 0) - (b.numero_pedido || 0));
 
+            // Búsqueda profunda de Gastos
             const qExpenses = query(collection(db, COL_GASTOS), where("fechaString", "==", targetFecha));
             const snapExpenses = await getDocs(qExpenses);
             rawGastos = snapExpenses.docs.map(d => ({ id: d.id, ...d.data() }));
 
+            // Fallback si no hay órdenes en DB (usamos respaldo de la caja)
+            if (rawMovs.length === 0 && cajaData && cajaData.movimientos_cierre) {
+                rawMovs = cajaData.movimientos_cierre;
+            }
         } catch (err) {
+            console.error(err);
             rawMovs = listaVentas;
             rawGastos = listaGastos;
         }
@@ -270,8 +278,10 @@ export default function App({ user: initialUser }) {
         pdf.setFont("helvetica", "bold");
         pdf.text("ISAKARI SUSHI - REPORTE DE CAJA", 105, 15, { align: 'center' });
         pdf.setFontSize(10);
+        pdf.setFont("helvetica", "normal");
         pdf.text(`Fecha Reporte: ${data.fechaString}`, 15, 25);
 
+        // Tabla Resumen
         pdf.autoTable({ 
             startY: 30, 
             head: [['Concepto', 'Monto']], 
@@ -287,11 +297,12 @@ export default function App({ user: initialUser }) {
             headStyles: { fillColor: [44, 62, 80] }
         });
 
+        // Desglose de Pagos
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 10,
             head: [['Desglose de Pagos', 'Monto']],
             body: [
-                ['Efectivo', formatoPeso(data.total_efectivo || 0)],
+                ['Efectivo (Ventas)', formatoPeso(data.total_efectivo || 0)],
                 ['Transferencias', formatoPeso(data.total_transferencia || 0)],
                 ['Débito/Tarjetas', formatoPeso(data.total_debito || 0)]
             ],
@@ -299,27 +310,40 @@ export default function App({ user: initialUser }) {
             headStyles: { fillColor: [44, 62, 80] }
         });
 
+        // DETALLE DE VENTAS
         pdf.setFontSize(12);
+        pdf.setFont("helvetica", "bold");
         pdf.text("DETALLE DE MOVIMIENTOS", 15, pdf.lastAutoTable.finalY + 15);
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 20,
-            head: [['N°', 'Cliente', 'Detalle', 'Tipo', 'Total', 'Pago']],
-            body: rawMovs.map(v => [
-                v.numero_pedido || '-',
-                (v.nombre_cliente || 'CLIENTE').toUpperCase(),
-                (v.items || []).map(i => `${i.cantidad} X ${i.nombre}`).join('\n'),
-                v.tipo_entrega || 'LOCAL',
-                formatoPeso(v.total_pagado || v.total),
-                v.metodo_pago
-            ]),
+            head: [['N°', 'Cliente', 'Detalle', 'Tipo', 'Envío', 'Total', 'Pago']],
+            body: rawMovs.map(v => {
+                const tipo = v.tipo_entrega || v.tipo || 'LOCAL';
+                const envioMonto = Number(v.costo_despacho !== undefined ? v.costo_despacho : (v.envio || 0));
+
+                return [
+                    v.numero_pedido || v.numero || '-',
+                    (v.nombre_cliente || v.cliente || 'CLIENTE').toUpperCase(),
+                    (v.items || []).map(i => `${i.cantidad} X ${i.nombre}`).join('\n'),
+                    tipo.toUpperCase(), // Solo mostramos el tipo (LOCAL/REPARTO)
+                    formatoPeso(envioMonto), // El valor queda solo en esta columna
+                    formatoPeso(v.total_pagado || v.total || 0),
+                    v.metodo_pago || v.pago || 'N/A'
+                ];
+            }),
             theme: 'grid',
             headStyles: { fillColor: [44, 62, 80] },
-            styles: { fontSize: 6.5, valign: 'middle', overflow: 'linebreak' },
-            columnStyles: { 2: { cellWidth: 55 } }
+            styles: { fontSize: 6, valign: 'middle', overflow: 'linebreak' },
+            columnStyles: { 
+                2: { cellWidth: 55 }, // Detalle productos
+                4: { cellWidth: 20 }  // Envío
+            }
         });
 
+        // DETALLE DE GASTOS
         if (rawGastos.length > 0) {
             pdf.setFontSize(12);
+            pdf.setFont("helvetica", "bold");
             pdf.text("DETALLE DE GASTOS", 15, pdf.lastAutoTable.finalY + 15);
             pdf.autoTable({
                 startY: pdf.lastAutoTable.finalY + 20,
@@ -336,6 +360,7 @@ export default function App({ user: initialUser }) {
         }
 
         pdf.save(`Reporte_Caja_${data.fechaString}.pdf`);
+        notificar("PDF Descargado");
     };
 
     const handleAbrirCaja = async () => {
@@ -357,13 +382,24 @@ export default function App({ user: initialUser }) {
         if (!idCajaAbierta) return;
         if (!window.confirm("¿Confirma el cierre del turno actual?")) return;
         try {
+            const movimientosRespaldados = listaVentas.map(v => ({
+                numero: v.numero_pedido || '-',
+                cliente: v.nombre_cliente || 'CLIENTE',
+                items: v.items || [],
+                tipo: v.tipo_entrega || 'LOCAL',
+                envio: v.costo_despacho || 0,
+                total: v.total_pagado || v.total || 0,
+                pago: v.metodo_pago || 'N/A'
+            }));
+
             await updateDoc(doc(db, COL_CAJAS, idCajaAbierta), { 
                 estado: "cerrada", fecha_cierre: Timestamp.now(), 
                 monto_cierre_sistema: efectivoEnCajon, 
                 total_ventas: totalBrutoRecaudado, total_ventas_netas: totalVentasNetas,
                 total_envios: totalEnvios, total_gastos: totalGastos, 
                 total_ganancia: gananciaReal, monto_apertura: montoApertura,
-                total_efectivo: efectivoRecaudadoTotal, total_transferencia: transferencia, total_debito: debito
+                total_efectivo: efectivoRecaudadoTotal, total_transferencia: transferencia, total_debito: debito,
+                movimientos_cierre: movimientosRespaldados
             });
             notificar("Caja cerrada exitosamente");
         } catch (e) { notificar("Error al cerrar", "error"); }
@@ -470,7 +506,6 @@ export default function App({ user: initialUser }) {
                                     </div>
                                     
                                     <div className="flex items-center gap-6">
-                                        {/* UNIFICACIÓN VISUAL DE DESGLOSE DE PAGOS SOLICITADA */}
                                         <div className="text-right">
                                             <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">EFECTIVO</div>
                                             <div className="font-black text-slate-600 text-sm">{formatoPeso(c.total_efectivo || 0)}</div>
