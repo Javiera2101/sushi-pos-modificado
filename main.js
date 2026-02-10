@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const { exec } = require('child_process');
 
-// 1. SOLUCIÓN A PANTALLA BLANCA EN LINUX/INTEL
+// 1. SOLUCIÓN A PANTALLA BLANCA
 app.disableHardwareAcceleration();
 
 let mainWindow;
@@ -31,7 +31,7 @@ if (!gotTheLock) {
       const iconPath = path.join(__dirname, 'icon.png'); 
       appIcon = nativeImage.createFromPath(iconPath);
     } catch (e) {
-      console.log("Icono no encontrado, usando genérico.");
+      console.log("Icono no encontrado.");
     }
 
     mainWindow = new BrowserWindow({
@@ -64,10 +64,8 @@ if (!gotTheLock) {
   app.whenReady().then(createWindow);
 }
 
-// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS)
+// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS) - REPARADO PARA NOTAS
 ipcMain.on('imprimir-ticket-raw', (event, data) => {
-  console.log("🖨️ Generando Ticket RAW...");
-
   const ESC = '\x1B';
   const GS = '\x1D';
   const INIT = ESC + '@';
@@ -79,119 +77,104 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
   const CUT = GS + 'V' + '\x41' + '\x00'; 
   const OPEN_DRAWER = ESC + 'p' + '\x00' + '\x19' + '\xFA'; 
 
-  // --- FUNCIONES AUXILIARES DE FORMATEO ---
   const fmt = (num) => '$' + parseInt(num || 0).toLocaleString('es-CL');
   
   const limpiarTexto = (str) => {
     if(!str) return "";
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
   };
 
   /**
-   * Divide un texto en varias líneas si supera el límite de caracteres.
-   * Límite bajado a 24 para asegurar compatibilidad total.
+   * Ajuste de texto para que no se corte bruscamente
    */
-  const formatearTextoLargo = (text, limite = 24) => {
+  const wrap = (text, limit = 32) => {
     if (!text) return "";
-    const palabras = text.split(' ');
-    let lineas = [];
-    let lineaActual = '';
+    let words = text.split(' ');
+    let lines = [];
+    let currentLine = '';
 
-    palabras.forEach(palabra => {
-      // Si la palabra sola es más larga que el límite (ej. una dirección sin espacios)
-      if (palabra.length > limite) {
-        if (lineaActual !== '') {
-          lineas.push(lineaActual);
-          lineaActual = '';
-        }
-        for (let i = 0; i < palabra.length; i += limite) {
-          lineas.push(palabra.substring(i, i + limite));
-        }
-        return;
-      }
-
-      const separador = lineaActual === '' ? '' : ' ';
-      if ((lineaActual + separador + palabra).length <= limite) {
-        lineaActual += separador + palabra;
+    words.forEach(word => {
+      if ((currentLine + ' ' + word).length <= limit) {
+        currentLine += (currentLine === '' ? '' : ' ') + word;
       } else {
-        lineas.push(lineaActual);
-        lineaActual = palabra;
+        lines.push(currentLine);
+        currentLine = word;
       }
     });
-
-    if (lineaActual !== '') {
-      lineas.push(lineaActual);
-    }
-    
-    // Usamos \n para el buffer binario
-    return lineas.filter(l => l.trim() !== '').join('\n');
+    lines.push(currentLine);
+    return lines.join('\n');
   };
 
   let ticket = INIT;
-  ticket += OPEN_DRAWER;
 
-  // Encabezado
-  ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
-  ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
-  ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
-  
-  // Cliente con wrap forzado
-  const clienteLimpio = limpiarTexto(data.cliente || 'CLIENTE');
-  ticket += `Cliente: ${formatearTextoLargo(clienteLimpio, 20)}\n`;
-  ticket += `Fecha: ${data.fecha || ''}\n--------------------------------\n`;
- 
-  // DETALLE DE LA ORDEN
-  ticket += ALIGN_LEFT;
-  const orden = Array.isArray(data.orden) ? data.orden : [];
-  orden.forEach(item => {
-    // Nombre del producto con wrap a 24
-    const nombreProd = formatearTextoLargo(limpiarTexto(item.nombre), 24);
-    ticket += `${item.cantidad} x ${nombreProd}\n`;
-    
-    if (item.observacion && item.observacion.trim() !== "") {
-      const obs = formatearTextoLargo(limpiarTexto(item.observacion), 22);
-      ticket += `  * ${obs}\n`;
+  // --- CASO A: INVENTARIO (LIMPIO) ---
+  if (data.tipo === 'INVENTARIO') {
+    ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
+    ticket += "CONTROL DE INVENTARIO\n";
+    ticket += `FECHA: ${data.fecha || ''}\n`;
+    ticket += "--------------------------------\n\n";
+    ticket += ALIGN_LEFT;
+
+    const items = Array.isArray(data.items) ? data.items : [];
+    items.forEach(insumo => {
+      const nombre = limpiarTexto(insumo);
+      ticket += nombre.padEnd(22, '.') + " ____\n";
+    });
+
+    ticket += "\n--------------------------------\n";
+    ticket += ALIGN_CENTER + "FIN DEL REPORTE\n\n\n\n" + CUT;
+  } 
+  // --- CASO B: VENTA (CON NOTAS REPARADAS) ---
+  else {
+    ticket += OPEN_DRAWER;
+    ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
+    ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
+    ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
+    ticket += `Cliente: ${limpiarTexto(data.cliente || 'CLIENTE')}\n`;
+    ticket += `Fecha: ${data.fecha || ''}\n--------------------------------\n`;
+    ticket += ALIGN_LEFT;
+
+    const orden = Array.isArray(data.orden) ? data.orden : [];
+    orden.forEach(item => {
+      // Nombre del producto
+      ticket += `${item.cantidad} x ${limpiarTexto(item.nombre)}\n`;
+      
+      // NOTAS ESPECÍFICAS DEL PRODUCTO
+      if (item.observacion && item.observacion.trim() !== "") {
+        ticket += `  * ${limpiarTexto(item.observacion)}\n`;
+      }
+      
+      // Precio a la derecha
+      ticket += ALIGN_RIGHT + `${fmt(item.precio * item.cantidad)}\n` + ALIGN_LEFT;
+    });
+
+    ticket += "--------------------------------\n";
+    if (parseInt(data.costoDespacho) > 0) {
+      ticket += ALIGN_RIGHT + `Envio: ${fmt(data.costoDespacho)}\n`;
     }
-    ticket += ALIGN_RIGHT + `${fmt(item.precio * item.cantidad)}\n` + ALIGN_LEFT;
-  });
-
-  ticket += "--------------------------------\n";
-
-  const totalFinal = parseInt(data.total) || 0;
-  const costoEnvio = parseInt(data.costoDespacho) || 0;
-  const subTotal = totalFinal - costoEnvio;
-
-  ticket += ALIGN_RIGHT;
-  if (costoEnvio > 0) {
-    ticket += `Envio: ${fmt(costoEnvio)}\n`;
-  }
-
-  ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(totalFinal)}\n` + BOLD_OFF;
+    ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(data.total)}\n` + BOLD_OFF;
  
-  if(data.tipoEntrega === 'REPARTO') {
-    ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
-    // DIRECCIÓN: Wrap forzado a 24 caracteres (Máxima seguridad)
-    const dirLimpia = limpiarTexto(data.direccion || 'Sin direccion');
-    const direccionFormateada = formatearTextoLargo(dirLimpia, 24);
-    ticket += `Dir: ${direccionFormateada}\n`;
-    ticket += `Tel: ${data.telefono || ''}\n`;
-  } else {
-    ticket += "\n" + ALIGN_CENTER + "*** RETIRO EN LOCAL ***\n";
+    if(data.tipoEntrega === 'REPARTO') {
+      ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
+      ticket += `Dir: ${wrap(limpiarTexto(data.direccion), 30)}\nTel: ${data.telefono || ''}\n`;
+    } else {
+      ticket += "\n" + ALIGN_CENTER + "*** RETIRO EN LOCAL ***\n";
+    }
+
+    // NOTAS GENERALES DEL PEDIDO
+    if (data.descripcion && data.descripcion.trim() !== "") {
+      ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBSERVACIONES:\n" + BOLD_OFF;
+      ticket += `${wrap(limpiarTexto(data.descripcion), 32)}\n`;
+    }
+
+    ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
   }
- 
-  if (data.descripcion && data.descripcion.trim() !== "") {
-    ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBS:\n" + BOLD_OFF;
-    ticket += formatearTextoLargo(limpiarTexto(data.descripcion), 24) + "\n";
-  }
- 
-  ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
 
   const tempPath = path.join(os.tmpdir(), 'ticket_raw.bin');
   fs.writeFileSync(tempPath, ticket, { encoding: 'binary' });
 
   exec(`lp -d impresora_termica -o raw "${tempPath}"`, (error) => {
     if (error) console.error(`❌ Error lp: ${error.message}`);
-    else console.log(`✅ Ticket enviado.`);
   });
 });
 
