@@ -144,7 +144,14 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
     ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
     ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
     ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 22)}\n`;
-    ticket += `Fecha: ${data.fecha || ''}\n--------------------------------\n`;
+    ticket += `Fecha: ${data.fecha || ''}\n`;
+    
+    // --- MODIFICACIÓN SOLICITADA: HORA ENTREGA ---
+    if (data.horaEntrega) {
+        ticket += `ENTREGA: ${data.horaEntrega}\n`;
+    }
+    
+    ticket += "--------------------------------\n";
     ticket += ALIGN_LEFT;
 
     const orden = Array.isArray(data.orden) ? data.orden : [];
@@ -183,6 +190,25 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
       ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBSERVACIONES:\n" + BOLD_OFF;
       ticket += wrapText(limpiarTexto(data.descripcion), 32) + "\n";
     }
+
+    // --- MODIFICACIÓN SOLICITADA: ESTADO Y DETALLE DE PAGO ---
+    let textoPago = "PAGO PENDIENTE";
+    
+    // Verificamos si está pagado
+    if (data.estadoPago && data.estadoPago.toString().toUpperCase() === 'PAGADO') {
+        if (Array.isArray(data.detallesPago) && data.detallesPago.length > 0) {
+            // Caso mixto o múltiple
+            const metodos = data.detallesPago.map(d => limpiarTexto(d.metodo)).join(' Y ');
+            textoPago = `PAGADO CON ${metodos}`;
+        } else {
+            // Caso simple
+            textoPago = `PAGADO CON ${limpiarTexto(data.metodoPago || 'EFECTIVO')}`;
+        }
+    }
+
+    ticket += ALIGN_CENTER + "\n--------------------------------\n";
+    ticket += BOLD_ON + textoPago + BOLD_OFF + "\n";
+    ticket += "--------------------------------\n";
 
     ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
   }
