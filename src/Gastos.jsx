@@ -37,40 +37,6 @@ if (typeof window !== 'undefined' && !window.__isakariPersistenceSetup) {
   } catch (err) {}
 }
 
-// --- DETECCIÓN DE ELECTRON ---
-const ipcRenderer = (function() {
-  try {
-    if (typeof window !== 'undefined' && window.require) {
-      const electron = window.require('electron');
-      return electron ? electron.ipcRenderer : null;
-    } else if (typeof window !== 'undefined' && window.electronAPI) {
-      return window.electronAPI;
-    }
-  } catch (e) { return null; }
-  return null;
-})();
-
-/**
- * LISTA DE INSUMOS OFICIAL (Basada en tu CSV)
- */
-const INSUMOS_LISTA = [
-    "Camarón", "Kanikama", "Salmón con piel", "Papas fritas", "Pollo", "Arrollado primavera",
-    "Gyosas de pollo", "Gyosas de cerdo", "Gyosas de camarón", "Empanadas de queso", "Carne de vacuno",
-    "Jamón", "J. serrano", "Salame", "Tocino", "Arroz", "Panko amarillo", "Nori", "Harina de pan",
-    "Levadura", "Mix de frutos secos", "Maní", "Queso crema", "Queso gauda", "Mayonesa", "Mostaza",
-    "Ketchup", "Miel", "Jengibre", "Wuasabi", "Salsa de tomate", "Vinagre de manzana", "Aceite",
-    "Soya", "Merquen", "Sésamo tostado", "Sésamo negro", "Oregano", "Ajo en polvo", "Sal", "Azúcar",
-    "Ciboulette", "Cebollín", "Tomate", "Limón", "Pimentón", "Palta", "Aceituna", "Choclo", "Palmito",
-    "Cebolla morada", "Pepino", "Zanahoria", "Royo d aluminio", "Nova", "Alusa grande", "Palito",
-    "Pote d soya", "Pote agridulce", "Tapas", "Caja d pizza", "Caja de dos roll", "Caja de tres roll",
-    "Potes de aluminio chico", "Potes de aluminio mediano", "Potes de aluminio grande",
-    "Saco de papel chico", "Saco de papel grande", "Bowl normal", "Bowl grande", "Suchi burger",
-    "Suchi pleto", "Royo de impresora", "Corchete", "Scotch", "Lápices pasta azul", "Cloro", 
-    "Cloro gel", "Limpia vidrio", "quix", "Limpia piso", "Confort", "Jabón", "esponja",
-    "Virutilla", "Trapero", "Bolsas de basura", "Bolsa de basura baño", "Paños", "Bolsa camisetas",
-    "Guantes taya S", "Guantes taya M", "Guantes taya L", "Cofias"
-];
-
 const getLocalDate = () => {
     const d = new Date();
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -90,6 +56,7 @@ export default function Gastos() {
   const [descripcion, setDescripcion] = useState('');
   const [monto, setMonto] = useState(''); 
   const [categoria, setCategoria] = useState('Gasto General');
+  const [origen, setOrigen] = useState('Caja'); // Nuevo estado para origen
   const [trabajador, setTrabajador] = useState('');
   const [gastoEditar, setGastoEditar] = useState(null);
 
@@ -160,6 +127,7 @@ export default function Gastos() {
       descripcion: String(descripcion).toUpperCase(),
       monto: cleanMonto,
       categoria: String(categoria),
+      origen: String(origen), // Guardar origen
       trabajador: categoria === 'Sueldo' ? String(trabajador).toUpperCase() : '',
       fechaString: fechaInicioCaja || hoyString,
       usuario_id: user.uid,
@@ -183,6 +151,7 @@ export default function Gastos() {
     setDescripcion('');
     setMonto('');
     setCategoria('Gasto General');
+    setOrigen('Caja'); // Reset origen
     setTrabajador('');
     setGastoEditar(null);
   };
@@ -192,26 +161,14 @@ export default function Gastos() {
     setDescripcion(g.descripcion); 
     setMonto(g.monto.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")); 
     setCategoria(g.categoria || 'Gasto General'); 
+    setOrigen(g.origen || 'Caja'); // Cargar origen
     setTrabajador(g.trabajador || '');
   };
 
-  // --- FUNCIÓN DE IMPRESIÓN COORDINADA CON ELECTRON ---
-  const handleImprimirInventario = () => {
-    if (ipcRenderer) {
-        // Enviamos el mensaje con el flag 'tipo: INVENTARIO'
-        // Esto le dice a Electron que use el formato de ticket limpio
-        ipcRenderer.send('imprimir-ticket-raw', {
-            tipo: 'INVENTARIO',
-            items: INSUMOS_LISTA,
-            fecha: hoyString.split('-').reverse().join('/')
-        });
-    } else {
-        // Fallback para navegador
-        window.print();
-    }
-  };
-
-  const totalHoy = listaGastos.reduce((acc, g) => acc + (Number(g.monto) || 0), 0);
+  // Calculamos el total SOLO de lo que sale de CAJA para mostrar en el sidebar
+  const totalCaja = listaGastos
+    .filter(g => !g.origen || g.origen === 'Caja') // Compatibilidad hacia atrás: si no tiene origen, es caja
+    .reduce((acc, g) => acc + (Number(g.monto) || 0), 0);
 
   if (cargando && !user) return <div className="h-full flex items-center justify-center font-black text-slate-300 animate-pulse uppercase tracking-widest italic">Cargando Gastos...</div>;
 
@@ -236,12 +193,28 @@ export default function Gastos() {
 
         <form onSubmit={handleGuardar} className="flex-1 flex flex-col min-h-0 relative">
             <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                
+                {/* SELECCIÓN DE CATEGORÍA */}
                 <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Categoría</label>
                     <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
                         <button type="button" onClick={() => setCategoria('Gasto General')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria !== 'Sueldo' ? 'bg-white shadow text-red-600' : 'text-gray-400'}`}>GENERAL</button>
                         <button type="button" onClick={() => setCategoria('Sueldo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria === 'Sueldo' ? 'bg-white shadow text-blue-600' : 'text-gray-400'}`}>SUELDO</button>
                     </div>
+                </div>
+
+                {/* SELECCIÓN DE ORIGEN DEL DINERO (NUEVO) */}
+                <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Origen del Dinero</label>
+                    <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
+                        <button type="button" onClick={() => setOrigen('Caja')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${origen === 'Caja' ? 'bg-white shadow text-emerald-600' : 'text-gray-400'}`}>
+                            CAJA (Efectivo)
+                        </button>
+                        <button type="button" onClick={() => setOrigen('Externo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${origen === 'Externo' ? 'bg-white shadow text-purple-600' : 'text-gray-400'}`}>
+                            EXTERNO
+                        </button>
+                    </div>
+                    {origen === 'Externo' && <p className="text-[9px] text-purple-500 font-bold ml-1">* No descuenta de Caja, sí afecta Utilidad.</p>}
                 </div>
 
                 <div className="space-y-1.5">
@@ -276,8 +249,8 @@ export default function Gastos() {
         </form>
 
         <div className="p-4 bg-slate-900 text-white flex-shrink-0 border-t border-slate-800">
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest opacity-60">Total del Turno</span>
-            <div className="text-2xl font-black tracking-tighter">{formatPeso(totalHoy)}</div>
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest opacity-60">Salidas de Caja</span>
+            <div className="text-2xl font-black tracking-tighter">{formatPeso(totalCaja)}</div>
         </div>
       </aside>
 
@@ -290,14 +263,6 @@ export default function Gastos() {
                     {idCajaAbierta ? `Turno activo: ${fechaInicioCaja}` : 'Abra una caja en el módulo Caja para registrar'}
                 </p>
             </div>
-            
-            <button 
-                onClick={handleImprimirInventario}
-                className="bg-white border-2 border-slate-200 text-slate-900 px-6 py-3 rounded-2xl text-[11px] font-black uppercase shadow-sm flex items-center gap-2 hover:bg-slate-100 transition-all active:scale-95"
-            >
-                <i className="bi bi-printer-fill text-lg"></i>
-                Lista Insumos
-            </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 pt-6 pb-32 space-y-3 custom-scrollbar">
@@ -311,6 +276,12 @@ export default function Gastos() {
                             <h4 className="font-black text-gray-800 uppercase leading-none text-sm">{g.descripcion}</h4>
                             <div className="flex gap-2 items-center mt-1">
                                 <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${g.categoria === 'Sueldo' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-gray-500'}`}>{g.categoria}</span>
+                                
+                                {/* BADGE DE ORIGEN */}
+                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${g.origen === 'Externo' ? 'bg-purple-100 text-purple-600 border border-purple-200' : 'bg-emerald-100 text-emerald-600 border border-emerald-200'}`}>
+                                    {g.origen || 'Caja'}
+                                </span>
+
                                 {g.trabajador && <span className="text-[10px] font-bold text-blue-500 uppercase">{g.trabajador}</span>}
                                 <span className="text-[10px] text-gray-300 font-bold">• {g.fecha?.seconds ? new Date(g.fecha.seconds * 1000).toLocaleTimeString('es-CL', {hour:'2-digit', minute:'2-digit'}) : '--:--'}</span>
                             </div>
@@ -318,7 +289,7 @@ export default function Gastos() {
                     </div>
                     
                     <div className="flex items-center gap-5">
-                        <span className="text-xl font-black text-red-600 tracking-tighter">-{ formatPeso(g.monto) }</span>
+                        <span className={`text-xl font-black tracking-tighter ${g.origen === 'Externo' ? 'text-purple-600' : 'text-red-600'}`}>-{ formatPeso(g.monto) }</span>
                         <div className="flex gap-1">
                             <button onClick={() => iniciarEdicion(g)} className="w-10 h-10 flex items-center justify-center bg-slate-50 text-gray-400 rounded-xl hover:text-blue-600 transition-all shadow-sm"><i className="bi bi-pencil-fill"></i></button>
                             <button onClick={async () => { if(window.confirm("¿Borrar registro?")) await deleteDoc(doc(db, colGastos, g.id)); }} className="w-10 h-10 flex items-center justify-center bg-slate-50 text-gray-400 rounded-xl hover:text-red-600 transition-all shadow-sm"><i className="bi bi-trash3-fill"></i></button>

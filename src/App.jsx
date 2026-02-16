@@ -11,6 +11,7 @@ import HistorialPedidos from './HistorialPedidos.jsx';
 import Caja from './Caja.jsx';
 import Gastos from './Gastos.jsx';
 import GestionProductos from './GestionProductos.jsx';
+import Inventario from './Inventario.jsx'; // <--- 1. IMPORTADO AQUÍ
 
 // --- COMPONENTE DE LOGIN ---
 const Login = () => {
@@ -158,7 +159,8 @@ const AppContent = () => {
             { id: 'HISTORIAL', icon: 'bi-clock-history', label: 'Historial' },
             { id: 'CAJA', icon: 'bi-cash-coin', label: 'Caja' },
             { id: 'GASTOS', icon: 'bi-wallet2', label: 'Gastos' },
-            { id: 'PRODUCTOS', icon: 'bi-box-seam', label: 'Productos' }
+            { id: 'PRODUCTOS', icon: 'bi-box-seam', label: 'Productos' },
+            { id: 'INVENTARIO', icon: 'bi-box-seam', label: 'Inventario' }, // <--- 2. AGREGADO AL MENÚ
           ].map((item) => (
             <button 
               key={item.id} 
@@ -207,6 +209,11 @@ const AppContent = () => {
         
         {seccion === 'CAJA' && (
           <Caja user={user} />
+        )}
+
+        {/* --- 3. RENDERIZADO DEL INVENTARIO --- */}
+        {seccion === 'INVENTARIO' && (
+          <Inventario user={user} />
         )}
         
         {seccion === 'GASTOS' && (

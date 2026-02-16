@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getAuth,
@@ -18,7 +18,6 @@ import {
   getDocs,
   where, 
   orderBy,
-  deleteDoc,
   enableIndexedDbPersistence
 } from 'firebase/firestore';
 
@@ -34,8 +33,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'sushi-pos-app';
 
 // Persistencia offline
 try {
-  if (typeof window !== 'undefined' && !window.__isakariPersistenceSet) {
-    window.__isakariPersistenceSet = true;
+  if (typeof window !== 'undefined') {
     enableIndexedDbPersistence(db).catch(() => {});
   }
 } catch (e) {}
@@ -64,7 +62,7 @@ const obtenerFechaReal = (timestamp, fechaStringFallback) => {
     return fechaStringFallback || getFechaChile();
 };
 
-export default function App({ user: initialUser }) {
+export default function Caja({ user: initialUser }) {
     const [notificacion, setNotificacion] = useState(null);
     const notificar = (msg, tipo = 'success') => {
         setNotificacion({ msg, tipo });
@@ -213,7 +211,13 @@ export default function App({ user: initialUser }) {
             if (idCajaAbierta) {
                 const turno = snap.docs.map(d => ({ ...d.data(), id: d.id }));
                 setListaGastos(turno);
-                setTotalGastos(turno.reduce((sum, i) => sum + (Number(i.monto)||0), 0));
+                
+                // --- MODIFICACIÓN CLAVE: FILTRAR GASTOS EXTERNOS ---
+                const gastosCaja = turno
+                    .filter(g => !g.origen || g.origen === 'Caja') 
+                    .reduce((sum, i) => sum + (Number(i.monto)||0), 0);
+                
+                setTotalGastos(gastosCaja);
             }
         });
 
@@ -248,7 +252,6 @@ export default function App({ user: initialUser }) {
         let rawGastos = [];
 
         try {
-            // Búsqueda profunda de Órdenes
             const qOrders = query(collection(db, COL_ORDENES), where("fechaString", "==", targetFecha));
             const snapOrders = await getDocs(qOrders);
             rawMovs = snapOrders.docs
@@ -256,12 +259,10 @@ export default function App({ user: initialUser }) {
                 .filter(o => String(o.estado_pago).toLowerCase() === 'pagado')
                 .sort((a, b) => (a.numero_pedido || 0) - (b.numero_pedido || 0));
 
-            // Búsqueda profunda de Gastos
             const qExpenses = query(collection(db, COL_GASTOS), where("fechaString", "==", targetFecha));
             const snapExpenses = await getDocs(qExpenses);
             rawGastos = snapExpenses.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            // Fallback si no hay órdenes en DB (usamos respaldo de la caja)
             if (rawMovs.length === 0 && cajaData && cajaData.movimientos_cierre) {
                 rawMovs = cajaData.movimientos_cierre;
             }
@@ -281,7 +282,6 @@ export default function App({ user: initialUser }) {
         pdf.setFont("helvetica", "normal");
         pdf.text(`Fecha Reporte: ${data.fechaString}`, 15, 25);
 
-        // Tabla Resumen
         pdf.autoTable({ 
             startY: 30, 
             head: [['Concepto', 'Monto']], 
@@ -289,7 +289,7 @@ export default function App({ user: initialUser }) {
                 ['Caja Inicial', formatoPeso(data.monto_apertura)], 
                 ['Ventas Netas', formatoPeso(data.total_ventas_netas)], 
                 ['Total Envíos', formatoPeso(data.total_envios)], 
-                ['Gastos Totales', formatoPeso(data.total_gastos)], 
+                ['Gastos Caja', formatoPeso(data.total_gastos)], 
                 ['Ganancia Real', formatoPeso(data.total_ganancia)], 
                 ['EFECTIVO EN CAJA', formatoPeso(data.monto_cierre_sistema)]
             ],
@@ -297,7 +297,6 @@ export default function App({ user: initialUser }) {
             headStyles: { fillColor: [44, 62, 80] }
         });
 
-        // Desglose de Pagos
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 10,
             head: [['Desglose de Pagos', 'Monto']],
@@ -310,7 +309,6 @@ export default function App({ user: initialUser }) {
             headStyles: { fillColor: [44, 62, 80] }
         });
 
-        // DETALLE DE VENTAS
         pdf.setFontSize(12);
         pdf.setFont("helvetica", "bold");
         pdf.text("DETALLE DE MOVIMIENTOS", 15, pdf.lastAutoTable.finalY + 15);
@@ -325,8 +323,8 @@ export default function App({ user: initialUser }) {
                     v.numero_pedido || v.numero || '-',
                     (v.nombre_cliente || v.cliente || 'CLIENTE').toUpperCase(),
                     (v.items || []).map(i => `${i.cantidad} X ${i.nombre}`).join('\n'),
-                    tipo.toUpperCase(), // Solo mostramos el tipo (LOCAL/REPARTO)
-                    formatoPeso(envioMonto), // El valor queda solo en esta columna
+                    tipo.toUpperCase(),
+                    formatoPeso(envioMonto),
                     formatoPeso(v.total_pagado || v.total || 0),
                     v.metodo_pago || v.pago || 'N/A'
                 ];
@@ -335,22 +333,22 @@ export default function App({ user: initialUser }) {
             headStyles: { fillColor: [44, 62, 80] },
             styles: { fontSize: 6, valign: 'middle', overflow: 'linebreak' },
             columnStyles: { 
-                2: { cellWidth: 55 }, // Detalle productos
-                4: { cellWidth: 20 }  // Envío
+                2: { cellWidth: 55 },
+                4: { cellWidth: 20 }
             }
         });
 
-        // DETALLE DE GASTOS
         if (rawGastos.length > 0) {
             pdf.setFontSize(12);
             pdf.setFont("helvetica", "bold");
             pdf.text("DETALLE DE GASTOS", 15, pdf.lastAutoTable.finalY + 15);
             pdf.autoTable({
                 startY: pdf.lastAutoTable.finalY + 20,
-                head: [['Descripción', 'Categoría', 'Monto']],
+                head: [['Descripción', 'Categoría', 'Origen', 'Monto']],
                 body: rawGastos.map(g => [
                     (g.descripcion || '').toUpperCase(),
                     (g.categoria || 'GENERAL').toUpperCase(),
+                    (g.origen || 'CAJA').toUpperCase(),
                     formatoPeso(g.monto)
                 ]),
                 theme: 'grid',
@@ -444,7 +442,7 @@ export default function App({ user: initialUser }) {
                                 <div className="bg-slate-500 p-4 rounded-[1.5rem] shadow-md text-white"><span className="text-[9px] font-black uppercase opacity-70">Apertura</span><div className="text-xl font-black tracking-tighter mt-1">{formatoPeso(montoApertura)}</div></div>
                                 <div className="bg-emerald-600 p-4 rounded-[1.5rem] shadow-md text-white"><span className="text-[9px] font-black uppercase opacity-70">Ventas (Neto)</span><div className="text-xl font-black tracking-tighter mt-1">{formatoPeso(totalVentasNetas)}</div></div>
                                 <div className="bg-orange-600 p-4 rounded-[1.5rem] shadow-md text-white"><span className="text-[9px] font-black uppercase opacity-70">Repartos</span><div className="text-xl font-black tracking-tighter mt-1">{formatoPeso(totalEnvios)}</div></div>
-                                <div className="bg-rose-600 p-4 rounded-[1.5rem] shadow-md text-white"><span className="text-[9px] font-black uppercase opacity-70">Gastos</span><div className="text-xl font-black tracking-tighter mt-1">{formatoPeso(totalGastos)}</div></div>
+                                <div className="bg-rose-600 p-4 rounded-[1.5rem] shadow-md text-white"><span className="text-[9px] font-black uppercase opacity-70">Gastos Caja</span><div className="text-xl font-black tracking-tighter mt-1">{formatoPeso(totalGastos)}</div></div>
                                 <div className="bg-slate-900 p-5 rounded-[2rem] shadow-2xl text-white border-2 border-emerald-500/20"><span className="text-[10px] font-black uppercase text-emerald-400">Utilidad Turno</span><div className="text-2xl font-black tracking-tighter mt-1 text-emerald-400">{formatoPeso(gananciaReal)}</div></div>
                             </div>
                             
@@ -463,83 +461,87 @@ export default function App({ user: initialUser }) {
                                 <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-sm h-[400px]">
                                     <div className="p-3 border-b bg-slate-50 font-black uppercase text-[10px] tracking-wider text-slate-500">Ventas Pagadas</div>
                                     <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-                                        {listaVentas.map(v => (
-                                            <div key={v.id} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                                                <div className="max-w-[70%]">
-                                                    <div className="text-[10px] font-black uppercase truncate">#{v.numero_pedido} {v.nombre_cliente}</div>
-                                                    <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase">{v.metodo_pago}</span></div>
+                                            {listaVentas.map(v => (
+                                                <div key={v.id} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                    <div className="max-w-[70%]">
+                                                        <div className="text-[10px] font-black uppercase truncate">#{v.numero_pedido} {v.nombre_cliente}</div>
+                                                        <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase">{v.metodo_pago}</span></div>
+                                                    </div>
+                                                    <div className="text-right text-[11px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
                                                 </div>
-                                                <div className="text-right text-[11px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
-                                            </div>
-                                        ))}
+                                            ))}
                                     </div>
                                 </div>
 
                                 <div className="bg-white rounded-2xl border border-slate-200 flex flex-col overflow-hidden shadow-sm h-[400px]">
                                     <div className="p-3 border-b bg-rose-50 font-black uppercase text-[10px] tracking-wider text-rose-500">Egresos del Turno</div>
                                     <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-                                        {listaGastos.map(g => (
-                                            <div key={g.id} className="flex justify-between items-center p-2.5 bg-rose-50/30 rounded-xl border border-rose-100">
-                                                <div className="max-w-[70%]">
-                                                    <div className="text-[10px] font-black uppercase truncate">{g.descripcion}</div>
-                                                    <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-rose-600 font-bold bg-rose-50 px-1 rounded uppercase">{g.categoria}</span></div>
+                                            {listaGastos.map(g => (
+                                                <div key={g.id} className="flex justify-between items-center p-2.5 bg-rose-50/30 rounded-xl border border-rose-100">
+                                                    <div className="max-w-[70%]">
+                                                        <div className="text-[10px] font-black uppercase truncate">{g.descripcion}</div>
+                                                        <div className="flex gap-1.5 mt-0.5">
+                                                            <span className="text-[7px] text-rose-600 font-bold bg-rose-50 px-1 rounded uppercase">{g.categoria}</span>
+                                                            <span className={`text-[7px] font-bold px-1 rounded uppercase ${g.origen === 'Externo' ? 'bg-purple-100 text-purple-600' : 'bg-emerald-100 text-emerald-600'}`}>{g.origen || 'CAJA'}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className={`text-right text-[11px] font-black ${g.origen === 'Externo' ? 'text-purple-600' : 'text-rose-700'}`}>-{formatoPeso(g.monto)}</div>
                                                 </div>
-                                                <div className="text-right text-[11px] font-black text-rose-700">-{formatoPeso(g.monto)}</div>
-                                            </div>
-                                        ))}
+                                            ))}
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 ))}
+            </div>
 
-                {vista === 'historial' && (
-                    <div className="h-full flex flex-col overflow-hidden animate-fade-in">
-                        <header className="flex justify-between items-center mb-6 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm"><h2 className="text-xl font-black uppercase m-0 tracking-tighter">Historial</h2><input type="date" className="text-[10px] font-black p-2 rounded-xl bg-slate-50 border-none outline-none focus:ring-2 ring-red-500" value={filtroFechaHistorial} onChange={(e) => setFiltroFechaHistorial(e.target.value)} /></header>
-                        <div className="flex-1 overflow-y-auto space-y-3 pb-10 custom-scrollbar pr-2">
-                            {cajasAnteriores.filter(c => !filtroFechaHistorial || c.fechaString === filtroFechaHistorial).map(c => (
-                                <div key={c.id} className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 flex justify-between items-center hover:shadow-md transition-all">
-                                    <div className="flex-1">
-                                        <div className="text-lg font-black text-slate-900 tracking-tighter">{c.fechaString}</div>
-                                        <div className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">{c.usuario_email}</div>
+            {vista === 'historial' && (
+                <div className="h-full flex flex-col overflow-hidden animate-fade-in">
+                    <header className="flex justify-between items-center mb-6 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm"><h2 className="text-xl font-black uppercase m-0 tracking-tighter">Historial</h2><input type="date" className="text-[10px] font-black p-2 rounded-xl bg-slate-50 border-none outline-none focus:ring-2 ring-red-500" value={filtroFechaHistorial} onChange={(e) => setFiltroFechaHistorial(e.target.value)} /></header>
+                    <div className="flex-1 overflow-y-auto space-y-3 pb-10 custom-scrollbar pr-2">
+                        {cajasAnteriores.filter(c => !filtroFechaHistorial || c.fechaString === filtroFechaHistorial).map(c => (
+                            <div key={c.id} className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 flex justify-between items-center hover:shadow-md transition-all">
+                                <div className="flex-1">
+                                    <div className="text-lg font-black text-slate-900 tracking-tighter">{c.fechaString}</div>
+                                    <div className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">{c.usuario_email}</div>
+                                </div>
+                                
+                                <div className="flex items-center gap-6">
+                                    <div className="text-right">
+                                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">EFECTIVO</div>
+                                        <div className="font-black text-slate-600 text-sm">{formatoPeso(c.total_efectivo || 0)}</div>
                                     </div>
-                                    
-                                    <div className="flex items-center gap-6">
-                                        <div className="text-right">
-                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">EFECTIVO</div>
-                                            <div className="font-black text-slate-600 text-sm">{formatoPeso(c.total_efectivo || 0)}</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">TRANSF.</div>
-                                            <div className="font-black text-blue-600 text-sm">{formatoPeso(c.total_transferencia || 0)}</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">DÉBITO</div>
-                                            <div className="font-black text-purple-600 text-sm">{formatoPeso(c.total_debito || 0)}</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">VENTAS NETO</div>
-                                            <div className="font-black text-emerald-600 text-sm">{formatoPeso(c.total_ventas_netas)}</div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">CAJA</div>
-                                            <div className="font-black text-slate-900 text-sm">{formatoPeso(c.monto_cierre_sistema)}</div>
-                                        </div>
-                                        <div className="flex gap-2 ml-4">
-                                            <button onClick={() => handleExportarPDF(c)} className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center shadow-sm transition-all hover:bg-red-600 hover:text-white">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                                                  <path d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2M9.5 3V1.1L12.9 4.5h-3.4zM4.603 12.087a.8.8 0 0 1-.438-.42c-.195-.388-.13-.776.08-1.102.166-.257.433-.446.727-.53.367-.106.767-.053 1.141.105.35.149.674.416.99.713.116.11.235.23.35.358.338.381.603.765.803 1.125.105.19.188.359.252.503.045.099.073.18.092.246.012.042.02.072.024.089l.004.013.001.004a.2.2 0 0 1-.16.25c-.012 0-.025 0-.037-.002l-.013-.004-.045-.015a1.6 1.6 0 0 1-.188-.082 3.4 3.4 0 0 1-.45-.264 4.3 4.3 0 0 1-.654-.506 8.8 8.8 0 0 1-.806-.788 12.5 12.5 0 0 1-.73-.8c-.365-.442-.69-.823-.975-1.118l-.025-.025a.5.5 0 0 1-.003-.003l-.008-.007-.001-.001a1 1 0 0 0-.256-.16c-.167-.06-.339-.09-.531-.09-.237 0-.439.045-.613.143a.6.6 0 0 0-.214.759c.15.292.445.47.723.548.357.1.726.048 1.067-.116.326-.157.6-.41.86-.69z"/>
-                                                </svg>
-                                            </button>
-                                        </div>
+                                    <div className="text-right">
+                                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">TRANSF.</div>
+                                        <div className="font-black text-blue-600 text-sm">{formatoPeso(c.total_transferencia || 0)}</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">DÉBITO</div>
+                                        <div className="font-black text-purple-600 text-sm">{formatoPeso(c.total_debito || 0)}</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">VENTAS NETO</div>
+                                        <div className="font-black text-emerald-600 text-sm">{formatoPeso(c.total_ventas_netas)}</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">CAJA</div>
+                                        <div className="font-black text-slate-900 text-sm">{formatoPeso(c.monto_cierre_sistema)}</div>
+                                    </div>
+                                    <div className="flex gap-2 ml-4">
+                                        <button onClick={() => handleExportarPDF(c)} className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center shadow-sm transition-all hover:bg-red-600 hover:text-white">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                                <path d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2M9.5 3V1.1L12.9 4.5h-3.4zM4.603 12.087a.8.8 0 0 1-.438-.42c-.195-.388-.13-.776.08-1.102.166-.257.433-.446.727-.53.367-.106.767-.053 1.141.105.35.149.674.416.99.713.116.11.235.23.35.358.338.381.603.765.803 1.125.105.19.188.359.252.503.045.099.073.18.092.246.012.042.02.072.024.089l.004.013.001.004a.2.2 0 0 1-.16.25c-.012 0-.025 0-.037-.002l-.013-.004-.045-.015a1.6 1.6 0 0 1-.188-.082 3.4 3.4 0 0 1-.45-.264 4.3 4.3 0 0 1-.654-.506 8.8 8.8 0 0 1-.806-.788 12.5 12.5 0 0 1-.73-.8c-.365-.442-.69-.823-.975-1.118l-.025-.025a.5.5 0 0 1-.003-.003l-.008-.007-.001-.001a1 1 0 0 0-.256-.16c-.167-.06-.339-.09-.531-.09-.237 0-.439.045-.613.143a.6.6 0 0 0-.214.759c.15.292.445.47.723.548.357.1.726.048 1.067-.116.326-.157.6-.41.86-.69z"/>
+                                            </svg>
+                                        </button>
                                     </div>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        ))}
                     </div>
-                )}
-            </div>
+                </div>
+            )}
+
             <style>{`.custom-scrollbar::-webkit-scrollbar { width: 4px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; } .animate-fade-in { animation: fadeIn 0.3s ease-out; } @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }`}</style>
         </div>
     );
