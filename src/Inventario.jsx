@@ -49,7 +49,7 @@ export default function Inventario({ user }) {
   // Colección en la raíz
   const COL_INVENTARIO = user?.email === "prueba@isakari.com" ? "inventario_pruebas" : "inventario";
 
-  // --- NOTIFICACIONES (Posicionada abajo) ---
+  // --- NOTIFICACIONES (Posicionada abajo a la derecha) ---
   const notificar = (mensaje, tipo = 'success') => {
     setNotificacion({ mostrar: true, mensaje, tipo });
     setTimeout(() => setNotificacion({ mostrar: false, mensaje: '', tipo: '' }), 3000);
@@ -112,12 +112,8 @@ export default function Inventario({ user }) {
       return;
     }
 
-    const listaParaImprimir = aComprar.map(i => {
-      let texto = i.nombre;
-      if (i.esUrgente) texto += ` (URGENTE)`;
-      if (i.cantidad === 0) texto += ` (FALTA)`;
-      return texto;
-    });
+    // MODIFICADO: Solo enviamos el nombre, LIMPIO, sin (URGENTE) ni (FALTA)
+    const listaParaImprimir = aComprar.map(i => i.nombre);
 
     if (ipcRenderer) {
       ipcRenderer.send('imprimir-ticket-raw', {
@@ -144,7 +140,7 @@ export default function Inventario({ user }) {
       
       {/* NOTIFICACIÓN EN LA ESQUINA INFERIOR DERECHA */}
       {notificacion.mostrar && (
-        <div className={`fixed bottom-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-300 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`}>
+        <div className={`fixed bottom-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-300 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🔥' : '✅'}</span>
             <div>
                 <h4 className="font-black uppercase text-xs opacity-75">{notificacion.tipo === 'error' ? 'Atención' : 'Éxito'}</h4>
@@ -182,11 +178,7 @@ export default function Inventario({ user }) {
           value={unidad}
           onChange={e => setUnidad(e.target.value)}
         >
-          <option value="unid">Unid</option>
-          <option value="kg">Kg</option>
-          <option value="lts">Lts</option>
-          <option value="pqte">Pqte</option>
-          <option value="caja">Caja</option>
+          <option value="unid">Unid</option><option value="kg">Kg</option><option value="lts">Lts</option><option value="pqte">Pqte</option><option value="caja">Caja</option>
         </select>
         <button type="submit" className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-black uppercase text-xs hover:bg-emerald-600 transition-all w-full md:w-auto">
           Agregar
@@ -256,6 +248,7 @@ export default function Inventario({ user }) {
           </div>
         ))}
       </div>
+      <style>{`@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }`}</style>
     </div>
   );
 }
