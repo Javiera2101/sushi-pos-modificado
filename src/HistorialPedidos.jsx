@@ -333,10 +333,11 @@ export default function HistorialPedidos({ onEditar, user }) {
 
         notificar(`PAGO REGISTRADO CORRECTAMENTE`, "success");
         
-        ejecutarImpresionAutomatica({
+        // --- MODIFICACIÓN: SE ELIMINÓ LA IMPRESIÓN AUTOMÁTICA AL COBRAR EN HISTORIAL ---
+        /* ejecutarImpresionAutomatica({
             ...p,
             ...datosPago 
-        });
+        }); */
 
     } catch (err) {
         console.error("Error sincronización pago:", err);
