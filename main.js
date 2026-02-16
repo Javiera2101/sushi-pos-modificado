@@ -146,9 +146,9 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
     ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 22)}\n`;
     ticket += `Fecha: ${data.fecha || ''}\n`;
     
-    // --- MODIFICACIÓN SOLICITADA: HORA ENTREGA ---
+    // --- MODIFICACIÓN SOLICITADA: HORA ENTREGA EN NEGRITA ---
     if (data.horaEntrega) {
-        ticket += `ENTREGA: ${data.horaEntrega}\n`;
+        ticket += BOLD_ON + `ENTREGA: ${data.horaEntrega}\n` + BOLD_OFF;
     }
     
     ticket += "--------------------------------\n";
@@ -159,8 +159,15 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
       // Unificamos cantidad y nombre para el ajuste de línea
       const textoCompleto = `${item.cantidad} x ${limpiarTexto(item.nombre)}`;
       
+      // --- MODIFICACIÓN SOLICITADA: PRODUCTO EN NEGRITA ---
       // Aplicamos wrapText al bloque completo para que no se corte "QUESO"
-      ticket += wrapText(textoCompleto, 32) + "\n";
+      ticket += BOLD_ON + wrapText(textoCompleto, 32) + BOLD_OFF + "\n";
+
+      // --- NUEVO: Descripción del producto (Ingredientes) ---
+      if (item.descripcion && item.descripcion.trim() !== "") {
+        // Se imprime la descripción limpia y ajustada al ancho
+        ticket += wrapText(limpiarTexto(item.descripcion), 32) + "\n";
+      }
       
       // Notas específicas del producto (Si existen)
       if (item.observacion && item.observacion.trim() !== "") {

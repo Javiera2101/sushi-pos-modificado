@@ -64,6 +64,14 @@ const getLocalISODate = () => {
   }).format(new Date());
 };
 
+// Función auxiliar para obtener la hora actual en formato HH:MM para el input
+const getCurrentTimeForInput = () => {
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+};
+
 // --- COMPONENTE TICKET ---
 const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, horaEntrega, estadoPago, metodoPago, detallesPago }) => {
     const fechaChile = fecha && fecha.includes('-') ? fecha.split('-').reverse().join('/') : fecha;
@@ -156,7 +164,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     setNotificacion({ mostrar: true, mensaje, tipo });
     setTimeout(() => {
         setNotificacion({ mostrar: false, mensaje: '', tipo: '' });
-    }, 3000);
+    }, 4000);
   };
 
   const [user, setUser] = useState(propUser || null);
@@ -175,7 +183,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   }));
   
   // --- NUEVOS ESTADOS ---
-  const [horaEntrega, setHoraEntrega] = useState('');
+  const [horaEntrega, setHoraEntrega] = useState(getCurrentTimeForInput()); // Inicializamos con la hora actual
   const [mostrarModalPago, setMostrarModalPago] = useState(false);
   const [pagoTemporal, setPagoTemporal] = useState(null); 
   
@@ -220,7 +228,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, []);
 
-  // ESCUCHA DE CAJA (CORREGIDO: Apunta a la raíz)
+  // ESCUCHA DE CAJA (Apunta a la raíz)
   useEffect(() => {
     if (!user) return;
     const colRef = collection(db, COL_CAJAS);
@@ -232,7 +240,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, [user, COL_CAJAS]);
 
-  // CARGA DE MENÚ (CORREGIDO: Apunta a la raíz)
+  // CARGA DE MENÚ (Apunta a la raíz)
   useEffect(() => {
     if (!user) return;
     const cargarMenu = async () => {
@@ -245,7 +253,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     cargarMenu();
   }, [user, COL_MENU]);
 
-  // CONTADOR DE PEDIDOS (CORREGIDO: Apunta a la raíz)
+  // CONTADOR DE PEDIDOS (Apunta a la raíz)
   useEffect(() => {
     if (!user || ordenAEditar) return;
     const hoy = getLocalISODate();
@@ -263,6 +271,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, [user, ordenAEditar, COL_ORDENES]);
 
+  // CARGA DE DATOS AL EDITAR
   useEffect(() => {
     if (ordenAEditar) {
       setOrden(ordenAEditar.items || []);
@@ -275,8 +284,8 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       setNumeroPedidoVisual(ordenAEditar.numero_pedido);
       setDescripcionGeneral(ordenAEditar.descripcion || '');
       setHoraPedido(ordenAEditar.hora_pedido || '');
-      setHoraEntrega(ordenAEditar.hora_entrega || '');
-      setPagoTemporal(null); // Resetear pago temporal al editar
+      setHoraEntrega(ordenAEditar.hora_entrega || getCurrentTimeForInput()); // Si no tiene, pone la actual
+      setPagoTemporal(null); 
     }
   }, [ordenAEditar]);
 
@@ -364,7 +373,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
     setPagoTemporal(datosPago); // Actualizamos estado local
     setMostrarModalPago(false); // Cerramos modal
-    notificar("¡COBRO REGISTRADO! GUARDE EL PEDIDO PARA FINALIZAR.", "success"); // Notificación
+    notificar("¡COBRO REGISTRADO! GUARDE EL PEDIDO PARA FINALIZAR.", "success"); // Notificación EXPLÍCITA
   };
 
   // --- GUARDAR EN BD (FINAL - CORREGIDO A RAÍZ) ---
@@ -440,7 +449,16 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             const docRef = await addDoc(colRef, datos);
             pedidoIdGuardado = docRef.id;
             notificar(`PEDIDO #${datos.numero_pedido} GUARDADO EXITOSAMENTE`, "success"); 
-            setNombreCliente(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); setCostoDespacho(''); setDescripcionGeneral(''); setHoraEntrega('');
+            
+            // --- RESETEO DEL FORMULARIO CON LA HORA ACTUAL Y MODO LOCAL ---
+            setNombreCliente(''); 
+            setDireccion(''); 
+            setTelefono(''); 
+            setNotaPersonal(''); 
+            setCostoDespacho(''); 
+            setDescripcionGeneral('');
+            setHoraEntrega(getCurrentTimeForInput()); // Reset a hora actual
+            setTipoEntrega('LOCAL'); // Reset a modo LOCAL
             setOrden([]);
         }
 
@@ -495,8 +513,9 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   return (
     <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative main-app-container">
+      {/* NOTIFICACIÓN FLOTANTE (Toast) */}
       {notificacion.mostrar && (
-        <div className={`fixed top-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-300 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`}>
+        <div className={`fixed top-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🚫' : '✅'}</span>
             <div>
                 <h4 className="font-black uppercase text-xs opacity-75">{notificacion.tipo === 'error' ? 'Error' : 'Éxito'}</h4>
@@ -737,6 +756,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
         .scale-in { animation: scaleIn 0.2s ease-out; }
         @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        
+        @keyframes slideIn {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
         
         @media print { 
           body * { visibility: hidden; } 
