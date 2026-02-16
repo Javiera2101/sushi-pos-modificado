@@ -79,15 +79,38 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
   const fmt = (num) => '$' + parseInt(num || 0).toLocaleString('es-CL');
   
-  const limpiarTexto = (str) => {
-    if(!str) return "";
-    // Elimina tildes y caracteres especiales para evitar errores en la impresora
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  // FUNCIÓN DE LIMPIEZA AGRESIVA (ANTI-ERROR DE IMPRESORA)
+  const limpiarTexto = (input) => {
+    if (!input) return "";
+    
+    let str = input;
+    
+    // Si es un array simple, lo unimos
+    if (Array.isArray(input)) {
+        // Intentamos mapear si son objetos con propiedad 'nombre' o 'label'
+        if (input.length > 0 && typeof input[0] === 'object') {
+            str = input.map(i => i.nombre || i.name || i.label || JSON.stringify(i)).join(" ");
+        } else {
+            str = input.join(" ");
+        }
+    }
+    
+    // Aseguramos string
+    if (typeof str !== 'string') {
+        try { str = String(str); } catch(e) { str = ""; }
+    }
+
+    // 1. Normalizar caracteres (tildes)
+    // 2. Eliminar todo lo que NO sea ASCII estándar (Emojis, símbolos raros que bloquean impresoras)
+    // 3. Convertir a Mayúsculas
+    return str.normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "") // Quitar tildes
+              .replace(/[^\x20-\x7E]/g, "")    // CRÍTICO: Eliminar caracteres no imprimibles/raros
+              .toUpperCase();
   };
 
   /**
    * FUNCIÓN DE AJUSTE INTELIGENTE (Word Wrap)
-   * Evita que las palabras se corten a la mitad.
    */
   const wrapText = (text, limit = 32) => {
     if (!text) return "";
@@ -96,14 +119,12 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
     let currentLine = '';
 
     words.forEach(word => {
-      // Si la palabra sola es más larga que el límite, hay que cortarla (caso raro en comida)
       if (word.length > limit) {
         if (currentLine) lines.push(currentLine);
         lines.push(word.substring(0, limit));
         currentLine = word.substring(limit);
         return;
       }
-
       const testLine = currentLine ? currentLine + ' ' + word : word;
       if (testLine.length <= limit) {
         currentLine = testLine;
@@ -119,114 +140,140 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
   let ticket = INIT;
 
-  // --- CASO A: INVENTARIO (LISTA LIMPIA) ---
-  if (data.tipo === 'INVENTARIO') {
-    ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
-    ticket += "CONTROL DE INVENTARIO\n";
-    ticket += `FECHA: ${data.fecha || ''}\n`;
-    ticket += "--------------------------------\n\n";
-    ticket += ALIGN_LEFT;
+  try {
+      // --- CASO A: INVENTARIO (LISTA LIMPIA) ---
+      if (data.tipo === 'INVENTARIO') {
+        ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
+        ticket += "CONTROL DE INVENTARIO\n";
+        ticket += `FECHA: ${data.fecha || ''}\n`;
+        ticket += "--------------------------------\n\n";
+        ticket += ALIGN_LEFT;
 
-    const items = Array.isArray(data.items) ? data.items : [];
-    items.forEach(insumo => {
-      const nombre = limpiarTexto(insumo);
-      // Ajuste de puntos para que no salte de línea
-      ticket += nombre.padEnd(22, '.') + " ____\n";
-    });
+        const items = Array.isArray(data.items) ? data.items : [];
+        items.forEach(insumo => {
+          const nombre = limpiarTexto(insumo);
+          ticket += nombre.padEnd(22, '.') + " ____\n";
+        });
 
-    ticket += "\n--------------------------------\n";
-    ticket += ALIGN_CENTER + "FIN DEL REPORTE\n\n\n\n" + CUT;
-  } 
-  // --- CASO B: VENTA (CON AJUSTE DE PALABRAS MEJORADO) ---
-  else {
-    ticket += OPEN_DRAWER;
-    ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
-    ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
-    ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
-    ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 22)}\n`;
-    ticket += `Fecha: ${data.fecha || ''}\n`;
-    
-    // --- MODIFICACIÓN SOLICITADA: HORA ENTREGA EN NEGRITA ---
-    if (data.horaEntrega) {
-        ticket += BOLD_ON + `ENTREGA: ${data.horaEntrega}\n` + BOLD_OFF;
-    }
-    
-    ticket += "--------------------------------\n";
-    ticket += ALIGN_LEFT;
-
-    const orden = Array.isArray(data.orden) ? data.orden : [];
-    orden.forEach(item => {
-      // Unificamos cantidad y nombre para el ajuste de línea
-      const textoCompleto = `${item.cantidad} x ${limpiarTexto(item.nombre)}`;
-      
-      // --- MODIFICACIÓN SOLICITADA: PRODUCTO EN NEGRITA ---
-      // Aplicamos wrapText al bloque completo para que no se corte "QUESO"
-      ticket += BOLD_ON + wrapText(textoCompleto, 32) + BOLD_OFF + "\n";
-
-      // --- NUEVO: Descripción del producto (Ingredientes) ---
-      if (item.descripcion && item.descripcion.trim() !== "") {
-        // Se imprime la descripción limpia y ajustada al ancho
-        ticket += wrapText(limpiarTexto(item.descripcion), 32) + "\n";
-      }
-      
-      // Notas específicas del producto (Si existen)
-      if (item.observacion && item.observacion.trim() !== "") {
-        ticket += wrapText(`  * ${limpiarTexto(item.observacion)}`, 30) + "\n";
-      }
-      
-      // Precio alineado a la derecha
-      ticket += ALIGN_RIGHT + `${fmt(item.precio * item.cantidad)}\n` + ALIGN_LEFT;
-    });
-
-    ticket += "--------------------------------\n";
-    if (parseInt(data.costoDespacho) > 0) {
-      ticket += ALIGN_RIGHT + `Envio: ${fmt(data.costoDespacho)}\n`;
-    }
-    ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(data.total)}\n` + BOLD_OFF;
- 
-    if(data.tipoEntrega === 'REPARTO') {
-      ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
-      const dirLimpia = wrapText(`Dir: ${limpiarTexto(data.direccion)}`, 32);
-      ticket += `${dirLimpia}\nTel: ${data.telefono || ''}\n`;
-    } else {
-      ticket += "\n" + ALIGN_CENTER + "*** RETIRO EN LOCAL ***\n";
-    }
-
-    // Notas generales del pedido
-    if (data.descripcion && data.descripcion.trim() !== "") {
-      ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBSERVACIONES:\n" + BOLD_OFF;
-      ticket += wrapText(limpiarTexto(data.descripcion), 32) + "\n";
-    }
-
-    // --- MODIFICACIÓN SOLICITADA: ESTADO Y DETALLE DE PAGO ---
-    let textoPago = "PAGO PENDIENTE";
-    
-    // Verificamos si está pagado
-    if (data.estadoPago && data.estadoPago.toString().toUpperCase() === 'PAGADO') {
-        if (Array.isArray(data.detallesPago) && data.detallesPago.length > 0) {
-            // Caso mixto o múltiple
-            const metodos = data.detallesPago.map(d => limpiarTexto(d.metodo)).join(' Y ');
-            textoPago = `PAGADO CON ${metodos}`;
-        } else {
-            // Caso simple
-            textoPago = `PAGADO CON ${limpiarTexto(data.metodoPago || 'EFECTIVO')}`;
+        ticket += "\n--------------------------------\n";
+        ticket += ALIGN_CENTER + "FIN DEL REPORTE\n\n\n\n" + CUT;
+      } 
+      // --- CASO B: VENTA (CON AJUSTE DE PALABRAS MEJORADO) ---
+      else {
+        ticket += OPEN_DRAWER;
+        ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
+        ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
+        ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
+        ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 22)}\n`;
+        ticket += `Fecha: ${data.fecha || ''}\n`;
+        
+        if (data.horaEntrega) {
+            ticket += BOLD_ON + `ENTREGA: ${data.horaEntrega}\n` + BOLD_OFF;
         }
-    }
+        
+        ticket += "--------------------------------\n";
+        ticket += ALIGN_LEFT;
 
-    ticket += ALIGN_CENTER + "\n--------------------------------\n";
-    ticket += BOLD_ON + textoPago + BOLD_OFF + "\n";
-    ticket += "--------------------------------\n";
+        const orden = Array.isArray(data.orden) ? data.orden : [];
+        orden.forEach(item => {
+          const nombreLimpio = limpiarTexto(item.nombre);
+          
+          // Imprimir Nombre y Cantidad
+          const textoCompleto = `${item.cantidad} x ${nombreLimpio}`;
+          ticket += BOLD_ON + wrapText(textoCompleto, 32) + BOLD_OFF + "\n";
 
-    ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
+          // --- FILTRO ROBUSTO PARA NO IMPRIMIR INGREDIENTES LARGOS ---
+          // Detectamos palabras clave que indican "Combo" o "Mix"
+          const esProductoLargo = nombreLimpio.includes("MIXTO") || 
+                                  nombreLimpio.includes("PREMIUM") || 
+                                  nombreLimpio.includes("PROMO") || 
+                                  nombreLimpio.includes("TABLA") || 
+                                  nombreLimpio.includes("COMBINADO");
+
+          // Procesamiento seguro de descripción
+          let descTexto = "";
+          
+          if (!esProductoLargo && item.descripcion) {
+             // Manejo seguro de Arrays y Objetos para evitar errores
+             if (Array.isArray(item.descripcion)) {
+                 descTexto = item.descripcion.map(d => {
+                     if (typeof d === 'object') return d.nombre || d.name || '';
+                     return String(d);
+                 }).join(", ");
+             } else {
+                 descTexto = String(item.descripcion);
+             }
+          }
+
+          // Imprimimos descripción SOLO si no es "Largo" y tiene texto válido
+          if (descTexto && descTexto.trim() !== "") {
+            ticket += wrapText(limpiarTexto(descTexto), 32) + "\n";
+          }
+          
+          // Notas (Observaciones) - Siempre se intentan imprimir, limpiando caracteres raros
+          if (item.observacion) {
+            let obsTexto = "";
+            if (typeof item.observacion === 'object') {
+                 obsTexto = JSON.stringify(item.observacion); // Fallback por si acaso
+            } else {
+                 obsTexto = String(item.observacion);
+            }
+            const obsLimpia = limpiarTexto(obsTexto);
+            if (obsLimpia.trim() !== "") {
+                ticket += wrapText(`  * ${obsLimpia}`, 30) + "\n";
+            }
+          }
+          
+          ticket += ALIGN_RIGHT + `${fmt(item.precio * item.cantidad)}\n` + ALIGN_LEFT;
+        });
+
+        ticket += "--------------------------------\n";
+        if (parseInt(data.costoDespacho) > 0) {
+          ticket += ALIGN_RIGHT + `Envio: ${fmt(data.costoDespacho)}\n`;
+        }
+        ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(data.total)}\n` + BOLD_OFF;
+    
+        if(data.tipoEntrega === 'REPARTO') {
+          ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
+          const dirLimpia = wrapText(`Dir: ${limpiarTexto(data.direccion)}`, 32);
+          ticket += `${dirLimpia}\nTel: ${data.telefono || ''}\n`;
+        } else {
+          ticket += "\n" + ALIGN_CENTER + "*** RETIRO EN LOCAL ***\n";
+        }
+
+        if (data.descripcion && data.descripcion.trim() !== "") {
+          ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBSERVACIONES:\n" + BOLD_OFF;
+          ticket += wrapText(limpiarTexto(data.descripcion), 32) + "\n";
+        }
+
+        let textoPago = "PAGO PENDIENTE";
+        if (data.estadoPago && data.estadoPago.toString().toUpperCase() === 'PAGADO') {
+            if (Array.isArray(data.detallesPago) && data.detallesPago.length > 0) {
+                const metodos = data.detallesPago.map(d => limpiarTexto(d.metodo)).join(' Y ');
+                textoPago = `PAGADO CON ${metodos}`;
+            } else {
+                textoPago = `PAGADO CON ${limpiarTexto(data.metodoPago || 'EFECTIVO')}`;
+            }
+        }
+
+        ticket += ALIGN_CENTER + "\n--------------------------------\n";
+        ticket += BOLD_ON + textoPago + BOLD_OFF + "\n";
+        ticket += "--------------------------------\n";
+
+        ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
+      }
+
+      // Guardar y ejecutar comando de impresión
+      const tempPath = path.join(os.tmpdir(), 'ticket_raw.bin');
+      fs.writeFileSync(tempPath, ticket, { encoding: 'binary' });
+
+      exec(`lp -d impresora_termica -o raw "${tempPath}"`, (error) => {
+        if (error) console.error(`❌ Error lp: ${error.message}`);
+      });
+
+  } catch (errGlobal) {
+      console.error("CRASH EVITADO EN IMPRESIÓN:", errGlobal);
   }
-
-  // Guardar y ejecutar comando de impresión local (funciona OFFLINE)
-  const tempPath = path.join(os.tmpdir(), 'ticket_raw.bin');
-  fs.writeFileSync(tempPath, ticket, { encoding: 'binary' });
-
-  exec(`lp -d impresora_termica -o raw "${tempPath}"`, (error) => {
-    if (error) console.error(`❌ Error lp: ${error.message}`);
-  });
 });
 
 app.on('window-all-closed', () => {
