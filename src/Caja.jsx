@@ -84,7 +84,8 @@ export default function Caja({ user: initialUser }) {
     const [totalBrutoRecaudado, setTotalBrutoRecaudado] = useState(0); 
     const [totalVentasNetas, setTotalVentasNetas] = useState(0);     
     const [totalEnvios, setTotalEnvios] = useState(0);       
-    const [totalGastos, setTotalGastos] = useState(0);       
+    const [totalGastos, setTotalGastos] = useState(0); // Gastos SOLO de Caja (para cuadratura de efectivo)
+    const [totalGastosGlobales, setTotalGastosGlobales] = useState(0); // NUEVO: Gastos Totales (para utilidad)
     const [gananciaReal, setGananciaReal] = useState(0);
     const [efectivoEnCajon, setEfectivoEnCajon] = useState(0);
 
@@ -212,12 +213,17 @@ export default function Caja({ user: initialUser }) {
                 const turno = snap.docs.map(d => ({ ...d.data(), id: d.id }));
                 setListaGastos(turno);
                 
-                // --- MODIFICACIÓN CLAVE: FILTRAR GASTOS EXTERNOS ---
+                // 1. Gastos de Caja (afectan al efectivo físico)
                 const gastosCaja = turno
                     .filter(g => !g.origen || g.origen === 'Caja') 
                     .reduce((sum, i) => sum + (Number(i.monto)||0), 0);
                 
+                // 2. Gastos Totales (Caja + Externos, afectan a la Utilidad)
+                const gastosTodos = turno
+                    .reduce((sum, i) => sum + (Number(i.monto)||0), 0);
+                
                 setTotalGastos(gastosCaja);
+                setTotalGastosGlobales(gastosTodos);
             }
         });
 
@@ -227,9 +233,13 @@ export default function Caja({ user: initialUser }) {
     useEffect(() => {
         const netas = totalBrutoRecaudado - totalEnvios;
         setTotalVentasNetas(netas);
-        setGananciaReal(netas - totalGastos);
+        
+        // CORRECCIÓN: Utilidad = Ventas Netas - GASTOS TOTALES (Externos + Caja)
+        setGananciaReal(netas - totalGastosGlobales);
+        
+        // Efectivo en Cajón = (Apertura + Ventas Efectivo) - GASTOS SOLO DE CAJA
         setEfectivoEnCajon((montoApertura + efectivoRecaudadoTotal) - totalGastos);
-    }, [totalBrutoRecaudado, totalEnvios, totalGastos, montoApertura, efectivoRecaudadoTotal]);
+    }, [totalBrutoRecaudado, totalEnvios, totalGastos, totalGastosGlobales, montoApertura, efectivoRecaudadoTotal]);
 
     const handleExportarPDF = async (cajaData = null) => {
         if (!libsReady) {
@@ -290,7 +300,7 @@ export default function Caja({ user: initialUser }) {
                 ['Ventas Netas', formatoPeso(data.total_ventas_netas)], 
                 ['Total Envíos', formatoPeso(data.total_envios)], 
                 ['Gastos Caja', formatoPeso(data.total_gastos)], 
-                ['Ganancia Real', formatoPeso(data.total_ganancia)], 
+                ['Ganancia Real (Utilidad)', formatoPeso(data.total_ganancia)], 
                 ['EFECTIVO EN CAJA', formatoPeso(data.monto_cierre_sistema)]
             ],
             theme: 'striped',
