@@ -2,18 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth } from './firebase.js'; 
 
-// Contexto: Importamos useUi para saber el estado de la conexión
+// Contexto
 import { UiProvider, useUi } from './context/UiContext.jsx';
 
-// Importación de Componentes Reales
+// Componentes
 import TomarPedido from './TomarPedido.jsx';
 import HistorialPedidos from './HistorialPedidos.jsx';
 import Caja from './Caja.jsx';
 import Gastos from './Gastos.jsx';
 import GestionProductos from './GestionProductos.jsx';
-import Inventario from './Inventario.jsx'; // <--- 1. IMPORTADO AQUÍ
+import Inventario from './Inventario.jsx'; 
 
-// --- COMPONENTE DE LOGIN ---
+// --- LOGIN ---
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -37,48 +37,21 @@ const Login = () => {
     <div className="flex h-screen items-center justify-center bg-slate-900 font-sans text-gray-800">
       <div className="w-[450px] p-12 bg-white rounded-[3.5rem] shadow-2xl relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-2 bg-red-600"></div>
-        
         <div className="text-center mb-10">
           <h2 className="text-4xl font-black uppercase tracking-tighter text-slate-900 m-0">ISAKARI <span className="text-red-600">POS</span></h2>
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">Sistema de Gestión</p>
         </div>
-
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs font-black uppercase rounded-r-xl animate-bounce">
-            {error}
-          </div>
-        )}
-
+        {error && <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs font-black uppercase rounded-r-xl animate-bounce">{error}</div>}
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-2 tracking-widest">Usuario</label>
-            <input 
-              type="email" 
-              className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-[1.5rem] text-sm font-bold focus:border-red-500 focus:bg-white transition-colors outline-none"
-              placeholder="correo@isakari.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required 
-            />
+            <input type="email" className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-[1.5rem] text-sm font-bold focus:border-red-500 focus:bg-white transition-colors outline-none" placeholder="correo@isakari.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div>
             <label className="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-2 tracking-widest">Contraseña</label>
-            <input 
-              type="password" 
-              className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-[1.5rem] text-sm font-bold focus:border-red-500 focus:bg-white transition-colors outline-none"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required 
-            />
+            <input type="password" className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-[1.5rem] text-sm font-bold focus:border-red-500 focus:bg-white transition-colors outline-none" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full py-5 bg-red-600 text-white rounded-[1.5rem] font-black uppercase text-sm tracking-widest shadow-xl shadow-red-200 hover:bg-red-700 active:scale-95 transition-all disabled:opacity-50"
-          >
-            {loading ? 'Ingresando...' : 'Iniciar Sesión'}
-          </button>
+          <button type="submit" disabled={loading} className="w-full py-5 bg-red-600 text-white rounded-[1.5rem] font-black uppercase text-sm tracking-widest shadow-xl shadow-red-200 hover:bg-red-700 active:scale-95 transition-all disabled:opacity-50">{loading ? 'Ingresando...' : 'Iniciar Sesión'}</button>
         </form>
       </div>
     </div>
@@ -93,8 +66,6 @@ const AppContent = () => {
   const [ordenParaEditar, setOrdenParaEditar] = useState(null);
   
   const { isOnline } = useUi();
-
-  // Detectamos si el usuario actual es el de pruebas para mostrar el indicador
   const esPrueba = user?.email === "prueba@isakari.com";
 
   useEffect(() => {
@@ -115,17 +86,8 @@ const AppContent = () => {
     setSeccion('HISTORIAL'); 
   };
 
-  if (loading) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-slate-50 text-slate-300 font-black uppercase tracking-[0.2em] animate-pulse">
-        Cargando Sistema...
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Login />;
-  }
+  if (loading) return <div className="flex h-screen w-full items-center justify-center bg-slate-50 text-slate-300 font-black uppercase tracking-[0.2em] animate-pulse">Cargando Sistema...</div>;
+  if (!user) return <Login />;
 
   return (
     <div className="flex flex-col h-screen bg-slate-100 font-sans text-gray-800 overflow-hidden">
@@ -135,24 +97,19 @@ const AppContent = () => {
             <div className="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">I</div>
             <span className="text-white font-black tracking-tighter text-xl">ISAKARI <span className="text-red-600">POS</span></span>
             
-            {/* BADGE DE CONEXIÓN */}
             <div className={`ml-4 flex items-center gap-2 px-3 py-1 rounded-full border transition-colors ${isOnline ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400 animate-pulse'}`}>
                 <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
-                <span className="text-[9px] font-black uppercase tracking-widest">
-                    {isOnline ? 'ONLINE' : 'OFFLINE'}
-                </span>
+                <span className="text-[9px] font-black uppercase tracking-widest">{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
             </div>
 
-            {/* INDICADOR DE MODO PRUEBA (Muestra badge si es el usuario de prueba) */}
             {esPrueba && (
               <div className="ml-2 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600 text-white animate-pulse shadow-lg shadow-red-900/40 border border-red-500">
-                <i className="bi bi-shield-lock-fill text-[10px]"></i>
-                <span className="text-[9px] font-black uppercase tracking-widest">MODO PRUEBA</span>
+                <i className="bi bi-shield-lock-fill text-[10px]"></i><span className="text-[9px] font-black uppercase tracking-widest">MODO PRUEBA</span>
               </div>
             )}
         </div>
         
-        {/* MENU DE NAVEGACIÓN */}
+        {/* MENU */}
         <div className="flex gap-2 p-1 bg-slate-800/50 rounded-2xl border border-slate-700">
           {[
             { id: 'PEDIDO', icon: 'bi-pencil-square', label: 'Tomar Pedido' },
@@ -160,7 +117,7 @@ const AppContent = () => {
             { id: 'CAJA', icon: 'bi-cash-coin', label: 'Caja' },
             { id: 'GASTOS', icon: 'bi-wallet2', label: 'Gastos' },
             { id: 'PRODUCTOS', icon: 'bi-box-seam', label: 'Productos' },
-            { id: 'INVENTARIO', icon: 'bi-box-seam', label: 'Inventario' }, // <--- 2. AGREGADO AL MENÚ
+            { id: 'INVENTARIO', icon: 'bi-list-check', label: 'Inventario' },
           ].map((item) => (
             <button 
               key={item.id} 
@@ -180,49 +137,44 @@ const AppContent = () => {
           ))}
         </div>
 
-        <button 
-          onClick={() => signOut(auth)} 
-          className="w-10 h-10 rounded-xl bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-red-500 transition-colors flex items-center justify-center border border-slate-700"
-          title="Cerrar Sesión"
-        >
+        <button onClick={() => signOut(auth)} className="w-10 h-10 rounded-xl bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-red-500 transition-colors flex items-center justify-center border border-slate-700" title="Cerrar Sesión">
           <i className="bi bi-power text-lg"></i>
         </button>
       </nav>
 
-      {/* ÁREA DE CONTENIDO DINÁMICO */}
+      {/* ÁREA DE CONTENIDO (OPTIMIZADA PARA LECTURAS) */}
       <div className="flex-1 overflow-hidden relative z-0">
-        {seccion === 'PEDIDO' && (
-          <TomarPedido 
-            user={user} 
-            ordenAEditar={ordenParaEditar} 
-            onTerminarEdicion={handleTerminarEdicion} 
-          />
-        )}
         
-        {seccion === 'HISTORIAL' && (
-          <HistorialPedidos 
-            user={user} 
-            onEditar={handleEditarPedido} 
-            ordenParaEditar={ordenParaEditar}
-          />
-        )}
-        
-        {seccion === 'CAJA' && (
-          <Caja user={user} />
-        )}
+        {/* TRUCO DE RENDIMIENTO:
+            En lugar de usar {seccion === 'X' && <Componente />}, usamos style={{display}}
+            Esto mantiene los componentes "vivos" y conectados a Firebase aunque no se vean.
+            Evita re-leer la base de datos al cambiar de pestaña.
+        */}
 
-        {/* --- 3. RENDERIZADO DEL INVENTARIO --- */}
-        {seccion === 'INVENTARIO' && (
-          <Inventario user={user} />
-        )}
-        
-        {seccion === 'GASTOS' && (
-          <Gastos user={user} />
-        )}
+        <div className={`h-full w-full ${seccion === 'PEDIDO' ? 'd-block' : 'd-none'}`}>
+             <TomarPedido user={user} ordenAEditar={ordenParaEditar} onTerminarEdicion={handleTerminarEdicion} />
+        </div>
 
-        {seccion === 'PRODUCTOS' && (
-          <GestionProductos user={user} />
-        )}
+        <div className={`h-full w-full ${seccion === 'HISTORIAL' ? 'd-block' : 'd-none'}`}>
+             <HistorialPedidos user={user} onEditar={handleEditarPedido} ordenParaEditar={ordenParaEditar} />
+        </div>
+
+        <div className={`h-full w-full ${seccion === 'CAJA' ? 'd-block' : 'd-none'}`}>
+             <Caja user={user} />
+        </div>
+
+        <div className={`h-full w-full ${seccion === 'INVENTARIO' ? 'd-block' : 'd-none'}`}>
+             <Inventario user={user} />
+        </div>
+        
+        <div className={`h-full w-full ${seccion === 'GASTOS' ? 'd-block' : 'd-none'}`}>
+             <Gastos user={user} />
+        </div>
+
+        <div className={`h-full w-full ${seccion === 'PRODUCTOS' ? 'd-block' : 'd-none'}`}>
+             <GestionProductos user={user} />
+        </div>
+
       </div>
 
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" />
@@ -231,6 +183,10 @@ const AppContent = () => {
         body { font-family: 'Inter', sans-serif; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        
+        /* Asegurar que el contenedor oculto no ocupe espacio */
+        .d-none { display: none !important; }
+        .d-block { display: block !important; height: 100%; }
       `}</style>
     </div>
   );
