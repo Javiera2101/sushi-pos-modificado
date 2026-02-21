@@ -21,7 +21,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 
-// Habilitar persistencia local para modo offline
+// Habilitar persistencia local para modo offline (Ayuda a reducir lecturas al reabrir la app)
 try {
     if (typeof window !== 'undefined') {
         enableIndexedDbPersistence(db).catch(() => {});
@@ -43,8 +43,8 @@ export default function Inventario({ user }) {
   const [insumos, setInsumos] = useState([]);
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [unidad, setUnidad] = useState('unid');
-  const [filtro, setFiltro] = useState('todos'); // todos, faltantes, urgentes
-  const [busqueda, setBusqueda] = useState(''); // ESTADO PARA EL BUSCADOR
+  const [filtro, setFiltro] = useState('todos'); 
+  const [busqueda, setBusqueda] = useState(''); 
   const [notificacion, setNotificacion] = useState({ mostrar: false, mensaje: '', tipo: '' });
 
   // Colección en la raíz
@@ -56,23 +56,31 @@ export default function Inventario({ user }) {
     setTimeout(() => setNotificacion({ mostrar: false, mensaje: '', tipo: '' }), 3000);
   };
 
-  // --- CARGAR DATOS ---
+  // --- CARGAR DATOS (OPTIMIZADO) ---
   useEffect(() => {
     if (!user) return;
+
+    // ✅ OPTIMIZACIÓN DE LECTURA:
+    // Esta consulta se ejecuta UNA SOLA VEZ al montar el componente.
+    // 'onSnapshot' mantiene los datos sincronizados en tiempo real.
+    // NO se realizan nuevas lecturas a la base de datos cuando usas el buscador o cambias de pestaña.
     const q = query(collection(db, COL_INVENTARIO), orderBy('nombre'));
+    
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setInsumos(data);
+      setInsumos(data); // Guardamos TODO en memoria
     }, (error) => console.error("Error inventario:", error));
+    
     return () => unsubscribe();
   }, [user, COL_INVENTARIO]);
 
-  // --- ACCIONES ---
+  // --- ACCIONES DE BASE DE DATOS (Escrituras) ---
   const agregarInsumo = async (e) => {
     e.preventDefault();
     if (!nuevoNombre.trim()) return;
 
     try {
+      // ✅ Guardamos en mayúsculas para mantener orden visual
       await addDoc(collection(db, COL_INVENTARIO), {
         nombre: nuevoNombre.toUpperCase(),
         cantidad: 0,
@@ -104,9 +112,9 @@ export default function Inventario({ user }) {
     notificar("INSUMO ELIMINADO", "success");
   };
 
-  // --- IMPRESIÓN ---
+  // --- LÓGICA DE IMPRESIÓN ---
   
-  // 1. Imprimir solo faltantes o urgentes (Original)
+  // 1. Imprimir solo faltantes o urgentes
   const imprimirListaCompras = () => {
     const aComprar = insumos.filter(i => i.cantidad <= 0 || i.esUrgente);
 
@@ -114,21 +122,22 @@ export default function Inventario({ user }) {
       notificar("NADA PENDIENTE", "success");
       return;
     }
-
-    const listaParaImprimir = aComprar.map(i => i.nombre);
-
+    
+    // AÑADIDO: Ahora enviamos el nombre junto con la cantidad y unidad
+    const listaParaImprimir = aComprar.map(i => `${i.nombre} (${i.cantidad} ${i.unidad})`);
+    
     enviarAImpresora(listaParaImprimir);
   };
 
-  // 2. Imprimir TODO con cantidades actuales (Nuevo)
+  // 2. Imprimir TODO (Control de Stock Físico)
   const imprimirInventarioCompleto = () => {
     if (insumos.length === 0) {
         notificar("INVENTARIO VACÍO", "error");
         return;
     }
 
-    // Formato: "SALMON (12 KG)"
-    // El main.js agregará el "____" al final automáticamente
+    // Formateamos para que el main.js reciba: "NOMBRE (CANTIDAD)"
+    // El main.js se encargará de agregar los puntos "....." y la línea "____" al final.
     const listaParaImprimir = insumos.map(i => `${i.nombre} (${i.cantidad} ${i.unidad})`);
 
     enviarAImpresora(listaParaImprimir);
@@ -143,13 +152,13 @@ export default function Inventario({ user }) {
         });
         notificar("IMPRIMIENDO...", "success");
       } else {
-        window.print(); // Fallback para web
+        window.print(); // Fallback web
       }
   };
 
-  // --- FILTRADO VISUAL (Buscador + Filtro de pestañas) ---
+  // --- FILTRADO VISUAL (EN MEMORIA - CERO LECTURAS) ---
   const insumosFiltrados = insumos.filter(item => {
-    // 1. Filtro por texto (Buscador)
+    // 1. Filtro por texto (Buscador) - Se ejecuta en tu PC, no en Firebase
     const coincideBusqueda = item.nombre.toLowerCase().includes(busqueda.toLowerCase());
     
     // 2. Filtro por pestañas
@@ -221,7 +230,7 @@ export default function Inventario({ user }) {
         </button>
       </form>
 
-      {/* BARRA DE FILTROS Y BUSCADOR */}
+      {/* BARRA DE FILTROS Y BUSCADOR (OPTIMIZADO EN MEMORIA) */}
       <div className="flex flex-col md:flex-row gap-4 mb-6 justify-between items-center">
         {/* PESTAÑAS DE FILTRO */}
         <div className="flex gap-2 overflow-x-auto pb-2 w-full md:w-auto">
