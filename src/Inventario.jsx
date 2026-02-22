@@ -16,7 +16,14 @@ import {
 // --- CONFIGURACIÓN E INICIALIZACIÓN SEGURA DE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
-  : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
+  : { 
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "", 
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "", 
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "", 
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "", 
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "", 
+      appId: import.meta.env.VITE_FIREBASE_APP_ID || "" 
+    };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
@@ -47,6 +54,10 @@ export default function Inventario({ user }) {
   const [busqueda, setBusqueda] = useState(''); 
   const [notificacion, setNotificacion] = useState({ mostrar: false, mensaje: '', tipo: '' });
 
+  // --- ESTADOS PARA LA EDICIÓN ---
+  const [editandoId, setEditandoId] = useState(null);
+  const [editNombre, setEditNombre] = useState('');
+
   // Colección en la raíz
   const COL_INVENTARIO = user?.email === "prueba@isakari.com" ? "inventario_pruebas" : "inventario";
 
@@ -60,27 +71,22 @@ export default function Inventario({ user }) {
   useEffect(() => {
     if (!user) return;
 
-    // ✅ OPTIMIZACIÓN DE LECTURA:
-    // Esta consulta se ejecuta UNA SOLA VEZ al montar el componente.
-    // 'onSnapshot' mantiene los datos sincronizados en tiempo real.
-    // NO se realizan nuevas lecturas a la base de datos cuando usas el buscador o cambias de pestaña.
     const q = query(collection(db, COL_INVENTARIO), orderBy('nombre'));
     
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setInsumos(data); // Guardamos TODO en memoria
+      setInsumos(data); 
     }, (error) => console.error("Error inventario:", error));
     
     return () => unsubscribe();
   }, [user, COL_INVENTARIO]);
 
-  // --- ACCIONES DE BASE DE DATOS (Escrituras) ---
+  // --- ACCIONES DE BASE DE DATOS ---
   const agregarInsumo = async (e) => {
     e.preventDefault();
     if (!nuevoNombre.trim()) return;
 
     try {
-      // ✅ Guardamos en mayúsculas para mantener orden visual
       await addDoc(collection(db, COL_INVENTARIO), {
         nombre: nuevoNombre.toUpperCase(),
         cantidad: 0,
@@ -112,9 +118,23 @@ export default function Inventario({ user }) {
     notificar("INSUMO ELIMINADO", "success");
   };
 
+  // --- FUNCIÓN PARA GUARDAR EDICIÓN DEL NOMBRE ---
+  const guardarEdicionNombre = async (id) => {
+    if (!editNombre.trim()) {
+        setEditandoId(null);
+        return;
+    }
+    try {
+        await updateDoc(doc(db, COL_INVENTARIO, id), { nombre: editNombre.toUpperCase() });
+        notificar("NOMBRE ACTUALIZADO", "success");
+    } catch (error) {
+        console.error(error);
+        notificar("ERROR AL ACTUALIZAR", "error");
+    }
+    setEditandoId(null);
+  };
+
   // --- LÓGICA DE IMPRESIÓN ---
-  
-  // 1. Imprimir solo faltantes o urgentes
   const imprimirListaCompras = () => {
     const aComprar = insumos.filter(i => i.cantidad <= 0 || i.esUrgente);
 
@@ -122,24 +142,16 @@ export default function Inventario({ user }) {
       notificar("NADA PENDIENTE", "success");
       return;
     }
-    
-    // AÑADIDO: Ahora enviamos el nombre junto con la cantidad y unidad
     const listaParaImprimir = aComprar.map(i => `${i.nombre} (${i.cantidad} ${i.unidad})`);
-    
     enviarAImpresora(listaParaImprimir);
   };
 
-  // 2. Imprimir TODO (Control de Stock Físico)
   const imprimirInventarioCompleto = () => {
     if (insumos.length === 0) {
         notificar("INVENTARIO VACÍO", "error");
         return;
     }
-
-    // Formateamos para que el main.js reciba: "NOMBRE (CANTIDAD)"
-    // El main.js se encargará de agregar los puntos "....." y la línea "____" al final.
     const listaParaImprimir = insumos.map(i => `${i.nombre} (${i.cantidad} ${i.unidad})`);
-
     enviarAImpresora(listaParaImprimir);
   };
 
@@ -152,16 +164,14 @@ export default function Inventario({ user }) {
         });
         notificar("IMPRIMIENDO...", "success");
       } else {
-        window.print(); // Fallback web
+        window.print(); 
       }
   };
 
-  // --- FILTRADO VISUAL (EN MEMORIA - CERO LECTURAS) ---
+  // --- FILTRADO VISUAL ---
   const insumosFiltrados = insumos.filter(item => {
-    // 1. Filtro por texto (Buscador) - Se ejecuta en tu PC, no en Firebase
     const coincideBusqueda = item.nombre.toLowerCase().includes(busqueda.toLowerCase());
     
-    // 2. Filtro por pestañas
     let coincideFiltro = true;
     if (filtro === 'faltantes') coincideFiltro = item.cantidad <= 0;
     if (filtro === 'urgentes') coincideFiltro = item.esUrgente;
@@ -191,7 +201,6 @@ export default function Inventario({ user }) {
         </div>
         
         <div className="flex gap-2 flex-wrap">
-            {/* BOTÓN 1: IMPRIMIR TODO */}
             <button 
             onClick={imprimirInventarioCompleto}
             className="bg-slate-700 text-white px-5 py-3 rounded-2xl font-black uppercase text-[10px] shadow-lg hover:bg-slate-900 active:scale-95 transition-all flex items-center gap-2"
@@ -199,7 +208,6 @@ export default function Inventario({ user }) {
             <i className="bi bi-card-checklist text-lg"></i> Imprimir Todo
             </button>
 
-            {/* BOTÓN 2: IMPRIMIR FALTANTES */}
             <button 
             onClick={imprimirListaCompras}
             className="bg-slate-900 text-white px-5 py-3 rounded-2xl font-black uppercase text-[10px] shadow-lg hover:bg-black active:scale-95 transition-all flex items-center gap-2"
@@ -230,9 +238,8 @@ export default function Inventario({ user }) {
         </button>
       </form>
 
-      {/* BARRA DE FILTROS Y BUSCADOR (OPTIMIZADO EN MEMORIA) */}
+      {/* BARRA DE FILTROS Y BUSCADOR */}
       <div className="flex flex-col md:flex-row gap-4 mb-6 justify-between items-center">
-        {/* PESTAÑAS DE FILTRO */}
         <div className="flex gap-2 overflow-x-auto pb-2 w-full md:w-auto">
             {[
                 { id: 'todos', label: 'Todos', icon: '📦' }, 
@@ -249,7 +256,6 @@ export default function Inventario({ user }) {
             ))}
         </div>
 
-        {/* BUSCADOR */}
         <div className="relative w-full md:w-72 group">
             <i className="bi bi-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-red-500 transition-colors"></i>
             <input 
@@ -282,11 +288,49 @@ export default function Inventario({ user }) {
                     </div>
                 )}
 
-                <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-black text-slate-800 uppercase text-sm leading-tight pr-2 break-words">{item.nombre}</h3>
-                    <button onClick={() => eliminarInsumo(item.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
-                        <i className="bi bi-trash3-fill"></i>
-                    </button>
+                {/* --- SECCIÓN DE NOMBRE / EDICIÓN --- */}
+                <div className="flex justify-between items-start mb-2 min-h-[2rem]">
+                    {editandoId === item.id ? (
+                        <input 
+                            type="text" 
+                            autoFocus
+                            className="font-black text-slate-800 uppercase text-sm leading-tight mr-2 w-full bg-slate-50 border-b-2 border-blue-400 px-1 outline-none"
+                            value={editNombre}
+                            onChange={(e) => setEditNombre(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') guardarEdicionNombre(item.id);
+                                if (e.key === 'Escape') setEditandoId(null);
+                            }}
+                            onBlur={() => guardarEdicionNombre(item.id)}
+                        />
+                    ) : (
+                        <h3 className="font-black text-slate-800 uppercase text-sm leading-tight pr-2 break-words flex-1">
+                            {item.nombre}
+                        </h3>
+                    )}
+
+                    <div className="flex gap-1 flex-shrink-0">
+                        {editandoId === item.id ? (
+                            <button 
+                                onMouseDown={(e) => { e.preventDefault(); guardarEdicionNombre(item.id); }} 
+                                className="text-emerald-500 hover:text-emerald-600 transition-colors p-1"
+                                title="Guardar"
+                            >
+                                <i className="bi bi-check-circle-fill"></i>
+                            </button>
+                        ) : (
+                            <button 
+                                onClick={() => { setEditandoId(item.id); setEditNombre(item.nombre); }} 
+                                className="text-slate-300 hover:text-blue-500 transition-colors p-1"
+                                title="Editar Nombre"
+                            >
+                                <i className="bi bi-pencil-fill"></i>
+                            </button>
+                        )}
+                        <button onClick={() => eliminarInsumo(item.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1" title="Eliminar">
+                            <i className="bi bi-trash3-fill"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <div className="flex items-center justify-between bg-slate-50 rounded-2xl p-1 mb-3">

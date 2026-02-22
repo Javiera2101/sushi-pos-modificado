@@ -21,29 +21,27 @@ import {
   onAuthStateChanged 
 } from 'firebase/auth';
 
-// --- CONFIGURACIÓN E INICIALIZACIÓN SEGURA DE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
-  : { apiKey: "", authDomain: "", projectId: "", storageBucket: "", messagingSenderId: "", appId: "" };
+  : { 
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "", 
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "", 
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "", 
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "", 
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "", 
+      appId: import.meta.env.VITE_FIREBASE_APP_ID || "" 
+    };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(app);
 const auth = getAuth(app);
 
-// Habilitar persistencia local para modo offline
 try {
     if (typeof window !== 'undefined') {
-        enableIndexedDbPersistence(db).catch((err) => {
-            if (err.code === 'failed-precondition') {
-                console.warn('Persistencia falló: múltiples pestañas');
-            } else if (err.code === 'unimplemented') {
-                console.warn('Navegador no soporta persistencia');
-            }
-        });
+        enableIndexedDbPersistence(db).catch(() => {});
     }
 } catch (e) {}
 
-// --- DETECCIÓN DE ELECTRON ---
 const ipcRenderer = (function() {
   try {
     if (typeof window !== 'undefined' && window.require) {
@@ -54,7 +52,6 @@ const ipcRenderer = (function() {
   return null;
 })();
 
-// --- UTILIDADES DE FECHA LOCAL (CHILE) ---
 const getLocalISODate = () => {
   return new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'America/Santiago',
@@ -64,7 +61,6 @@ const getLocalISODate = () => {
   }).format(new Date());
 };
 
-// Función auxiliar para obtener la hora actual en formato HH:MM para el input
 const getCurrentTimeForInput = () => {
     const now = new Date();
     const hours = String(now.getHours()).padStart(2, '0');
@@ -72,11 +68,8 @@ const getCurrentTimeForInput = () => {
     return `${hours}:${minutes}`;
 };
 
-// --- COMPONENTE TICKET ---
 const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, horaEntrega, estadoPago, metodoPago, detallesPago }) => {
     const fechaChile = fecha && fecha.includes('-') ? fecha.split('-').reverse().join('/') : fecha;
-
-    // Lógica para el texto del pago al final
     let textoPago = "PAGO PENDIENTE";
     let estiloPago = "border-black"; 
 
@@ -99,7 +92,6 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
             <div className="mb-2 space-y-1">
                 <div>FECHA: {fechaChile} {hora}</div>
                 {horaEntrega && <div className="font-bold bg-black text-white inline-block px-1">ENTREGA: {horaEntrega}</div>}
-                
                 <div className="uppercase">CLIENTE: {cliente}</div>
                 <div className="uppercase font-bold">TIPO: {tipoEntrega}</div>
                 {tipoEntrega === 'REPARTO' && (
@@ -146,25 +138,18 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                     {descripcion && <div className="italic text-[8px] uppercase opacity-75">Obs Cocina: {descripcion}</div>}
                 </div>
             )}
-
-            <div className={`uppercase mt-3 border p-1 text-center font-bold ${estiloPago}`}>
-                {textoPago}
-            </div>
-
+            <div className={`uppercase mt-3 border p-1 text-center font-bold ${estiloPago}`}>{textoPago}</div>
             <div className="text-center mt-2 opacity-50 uppercase text-[8px]">Sistema POS Local - Chile</div>
         </div>
     );
 };
 
-// --- COMPONENTE PRINCIPAL ---
-export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: propUser }) {
+export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: propUser, cajaAbiertaGlobal }) {
   const [notificacion, setNotificacion] = useState({ mostrar: false, mensaje: '', tipo: '' });
 
   const notificar = (mensaje, tipo = 'success') => {
     setNotificacion({ mostrar: true, mensaje, tipo });
-    setTimeout(() => {
-        setNotificacion({ mostrar: false, mensaje: '', tipo: '' });
-    }, 4000);
+    setTimeout(() => { setNotificacion({ mostrar: false, mensaje: '', tipo: '' }); }, 4000);
   };
 
   const [user, setUser] = useState(propUser || null);
@@ -182,16 +167,13 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' 
   }));
   
-  // --- NUEVOS ESTADOS ---
-  const [horaEntrega, setHoraEntrega] = useState(getCurrentTimeForInput()); // Inicializamos con la hora actual
+  const [horaEntrega, setHoraEntrega] = useState(getCurrentTimeForInput());
   const [mostrarModalPago, setMostrarModalPago] = useState(false);
   const [pagoTemporal, setPagoTemporal] = useState(null); 
   
-  // Estados de cobro
   const [modoPago, setModoPago] = useState('unico'); 
   const [metodoUnico, setMetodoUnico] = useState('Efectivo');
   const [aplicarDescuento, setAplicarDescuento] = useState(false);
-  const [montoAbono, setMontoAbono] = useState('');
   const [montosMixtos, setMontosMixtos] = useState({ Efectivo: '', Transferencia: '', Débito: '' });
   const [metodosHabilitados, setMetodosHabilitados] = useState({ Efectivo: true, Transferencia: false, Débito: false });
   
@@ -199,12 +181,12 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [cargando, setCargando] = useState(true); 
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
   const [ultimoPedidoParaImprimir, setUltimoPedidoParaImprimir] = useState(null); 
-  const [cajaAbierta, setCajaAbierta] = useState(false);
+  
+  const cajaAbierta = cajaAbiertaGlobal !== undefined ? cajaAbiertaGlobal : true;
 
   const esPrueba = user?.email === "prueba@isakari.com";
   const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
   const COL_MENU = "menu";
-  const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
   const COL_MOVIMIENTOS = esPrueba ? "movimientos_pruebas" : "movimientos";
   
   const inputStyle = "w-full p-4 rounded-2xl border-2 border-gray-100 bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-black uppercase transition-all shadow-sm placeholder:text-gray-300";
@@ -213,55 +195,43 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else if (!auth.currentUser) {
-          await signInAnonymously(auth);
-        }
-      } catch (err) { console.error("Auth error:", err); }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
+  // --- FUNCIÓN LIMPIADORA CENTRALIZADA ---
+  const limpiarFormulario = () => {
+    setOrden([]);
+    setNombreCliente('');
+    setTipoEntrega('LOCAL');
+    setDireccion('');
+    setTelefono('');
+    setNotaPersonal('');
+    setCostoDespacho('');
+    setDescripcionGeneral('');
+    setHoraEntrega(getCurrentTimeForInput());
+    setPagoTemporal(null);
+  };
 
-  // ESCUCHA DE CAJA (Apunta a la raíz)
   useEffect(() => {
     if (!user) return;
-    const colRef = collection(db, COL_CAJAS);
+    const colRef = collection(db, COL_MENU);
     const unsubscribe = onSnapshot(colRef, (snap) => {
-        const docs = snap.docs.map(d => d.data());
-        const hayAbierta = docs.some(c => c.estado === "abierta");
-        setCajaAbierta(hayAbierta);
-    }, (err) => { console.error("Error Caja:", err); setCajaAbierta(false); });
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setMenu(items.sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
+        setCargando(false);
+    }, (error) => {
+        console.error("Error Menu:", error);
+        setCargando(false);
+    });
     return () => unsubscribe();
-  }, [user, COL_CAJAS]);
-
-  // CARGA DE MENÚ (Apunta a la raíz)
-  useEffect(() => {
-    if (!user) return;
-    const cargarMenu = async () => {
-        try {
-            const snap = await getDocs(collection(db, COL_MENU));
-            setMenu(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.nombre || '').localeCompare(b.nombre || '')));
-        } catch (e) { console.error("Error Menu:", e); }
-        finally { setCargando(false); }
-    };
-    cargarMenu();
   }, [user, COL_MENU]);
 
-  // CONTADOR DE PEDIDOS (Apunta a la raíz)
   useEffect(() => {
     if (!user || ordenAEditar) return;
     const hoy = getLocalISODate();
     const colRef = collection(db, COL_ORDENES);
-    const unsubscribe = onSnapshot(colRef, (snap) => {
-        const pedidosHoy = snap.docs.map(d => d.data()).filter(d => d.fechaString === hoy);
-        if (pedidosHoy.length > 0) {
-            const numeros = pedidosHoy.map(p => Number(p.numero_pedido) || 0);
+    const q = query(colRef, where("fechaString", "==", hoy));
+    
+    const unsubscribe = onSnapshot(q, (snap) => {
+        if (!snap.empty) {
+            const numeros = snap.docs.map(d => Number(d.data().numero_pedido) || 0);
             setNumeroPedidoVisual(Math.max(...numeros) + 1);
         } else {
             setNumeroPedidoVisual(1);
@@ -271,7 +241,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, [user, ordenAEditar, COL_ORDENES]);
 
-  // CARGA DE DATOS AL EDITAR
   useEffect(() => {
     if (ordenAEditar) {
       setOrden(ordenAEditar.items || []);
@@ -284,8 +253,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       setNumeroPedidoVisual(ordenAEditar.numero_pedido);
       setDescripcionGeneral(ordenAEditar.descripcion || '');
       setHoraPedido(ordenAEditar.hora_pedido || '');
-      setHoraEntrega(ordenAEditar.hora_entrega || getCurrentTimeForInput()); // Si no tiene, pone la actual
+      setHoraEntrega(ordenAEditar.hora_entrega || getCurrentTimeForInput());
       setPagoTemporal(null); 
+    } else {
+      // SI ORDEN A EDITAR ES NULO, LIMPIAMOS COMPLETAMENTE LA MEMORIA LOCAL
+      limpiarFormulario();
     }
   }, [ordenAEditar]);
 
@@ -335,7 +307,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     }
   };
 
-  // --- CONFIRMAR COBRO (SOLO EN MEMORIA) ---
   const handleConfirmarCobro = () => {
     const totalOriginal = totalFinal;
     const montoDescuento = aplicarDescuento ? Math.round(totalOriginal * 0.1) : 0;
@@ -361,7 +332,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         return;
     }
 
-    // Guardamos los datos del pago EN MEMORIA (pagoTemporal)
     const datosPago = {
         estado_pago: 'Pagado',
         metodo_pago: metodoGeneral,
@@ -371,12 +341,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         fecha_pago: Timestamp.now()
     };
 
-    setPagoTemporal(datosPago); // Actualizamos estado local
-    setMostrarModalPago(false); // Cerramos modal
-    notificar("¡COBRO REGISTRADO! GUARDE EL PEDIDO PARA FINALIZAR.", "success"); // Notificación EXPLÍCITA
+    setPagoTemporal(datosPago);
+    setMostrarModalPago(false); 
+    notificar("¡COBRO REGISTRADO! GUARDE EL PEDIDO PARA FINALIZAR.", "success");
   };
 
-  // --- GUARDAR EN BD (FINAL - CORREGIDO A RAÍZ) ---
   const enviarCocina = async () => {
     if (orden.length === 0) {
         notificar("EL PEDIDO ESTÁ VACÍO. AGREGA PRODUCTOS ANTES DE CONFIRMAR.", "error");
@@ -390,7 +359,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
     const hoy = getLocalISODate();
     
-    // Determinamos si vamos a usar el pago temporal (recién hecho) o si ya venía pagado
     let sourcePago = null;
     if (pagoTemporal) {
         sourcePago = pagoTemporal;
@@ -406,7 +374,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     let fechaPago = sourcePago?.fecha_pago || null;
     let descuento = sourcePago?.descuento || 0;
 
-    // Si no hay pago ni edición pagada, limpiamos
     if (!sourcePago && !ordenAEditar) {
         detallesPago = []; totalPagado = 0; fechaPago = null; descuento = 0;
     }
@@ -444,25 +411,20 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
             pedidoIdGuardado = ordenAEditar.id;
             notificar(`PEDIDO #${datos.numero_pedido} ACTUALIZADO CORRECTAMENTE`, "success"); 
+            
+            // LIMPIEZA FORZOSA TRAS ACTUALIZAR
+            limpiarFormulario();
+            
             if (onTerminarEdicion) onTerminarEdicion();
         } else {
             const docRef = await addDoc(colRef, datos);
             pedidoIdGuardado = docRef.id;
             notificar(`PEDIDO #${datos.numero_pedido} GUARDADO EXITOSAMENTE`, "success"); 
             
-            // --- RESETEO DEL FORMULARIO CON LA HORA ACTUAL Y MODO LOCAL ---
-            setNombreCliente(''); 
-            setDireccion(''); 
-            setTelefono(''); 
-            setNotaPersonal(''); 
-            setCostoDespacho(''); 
-            setDescripcionGeneral('');
-            setHoraEntrega(getCurrentTimeForInput()); // Reset a hora actual
-            setTipoEntrega('LOCAL'); // Reset a modo LOCAL
-            setOrden([]);
+            // LIMPIEZA FORZOSA TRAS GUARDAR NUEVO
+            limpiarFormulario();
         }
 
-        // REGISTRAR MOVIMIENTOS EN CAJA (Solo si hubo un pago temporal nuevo en esta sesión)
         if (pagoTemporal && detallesPago && detallesPago.length > 0) {
             const movRef = collection(db, COL_MOVIMIENTOS);
             for (const detalle of detallesPago) {
@@ -479,7 +441,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             }
         }
 
-        setPagoTemporal(null); // Limpiamos el pago temporal tras guardar
+        setPagoTemporal(null);
         ejecutarImpresion(datos);
         setMostrarModalPago(false); 
     } catch (error) {
@@ -513,7 +475,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   return (
     <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative main-app-container">
-      {/* NOTIFICACIÓN FLOTANTE (Toast) */}
+      {/* NOTIFICACIÓN FLOTANTE */}
       {notificacion.mostrar && (
         <div className={`fixed top-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🚫' : '✅'}</span>
@@ -533,7 +495,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               </div>
               <div className="flex gap-2">
                   <button onClick={() => setMostrarVistaPrevia(true)} className="p-2 bg-white border border-gray-200 rounded-2xl text-gray-400 hover:text-red-600 shadow-sm transition-all">👁️</button>
-                  {/* BOTÓN COBRAR (MODIFICADO) */}
                   <button 
                     onClick={() => {
                         setMostrarModalPago(true);
@@ -548,7 +509,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                   >
                       {pagoTemporal ? '¡COBRADO! (LISTO)' : 'COBRAR'}
                   </button>
-                  {/* BOTÓN CONFIRMAR */}
                   <button 
                     onClick={() => enviarCocina()} 
                     disabled={!cajaAbierta}
@@ -648,7 +608,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         )}
       </main>
 
-      {/* --- MODAL DE COBRO (ESTILO HISTORIAL) --- */}
+      {/* --- MODAL DE COBRO --- */}
       {mostrarModalPago && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[99999] flex items-center justify-center p-4 animate-in fade-in" onClick={() => setMostrarModalPago(false)}>
             <div className="bg-white rounded-[3rem] p-8 max-w-sm w-full shadow-2xl space-y-6 scale-in border border-white" onClick={e => e.stopPropagation()}>
@@ -728,6 +688,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         </div>
       )}
 
+      {/* ELEMENTO DE IMPRESIÓN (SOLO WEB) */}
       {ultimoPedidoParaImprimir && (
         <div className="hidden print:block fixed inset-0 bg-white z-[10000]">
             <Ticket 
@@ -751,6 +712,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         </div>
       )}
 
+      {/* ESTILOS DE IMPRESIÓN AISLADOS */}
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }

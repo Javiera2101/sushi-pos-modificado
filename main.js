@@ -152,7 +152,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         const items = Array.isArray(data.items) ? data.items : [];
         items.forEach(insumo => {
           const nombre = limpiarTexto(insumo);
-          ticket += nombre.padEnd(22, '.') + " ____\n";
+          ticket += nombre.padEnd(22, '.') + " __\n";
         });
 
         ticket += "\n--------------------------------\n";
