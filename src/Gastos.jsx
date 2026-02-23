@@ -178,17 +178,19 @@ export default function Gastos() {
 
       {/* SIDEBAR DE REGISTRO */}
       <aside className="w-[380px] h-full bg-white shadow-xl flex flex-col z-20 border-r border-gray-200">
-        <div className="p-4 border-b bg-gray-50 flex-shrink-0">
-            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{esPrueba ? 'Pruebas' : 'Producción'}</span>
-            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tighter leading-none mt-1">
-                {gastoEditar ? 'Editar Egreso' : 'Nueva Salida'}
+        
+        {/* --- HEADER LIMPIO Y ALERTA DE CAJA --- */}
+        <div className="p-4 border-b border-gray-100 bg-gray-50 flex-shrink-0 space-y-2">
+            <h2 className="text-xl font-black text-gray-900 uppercase tracking-tighter leading-none">
+                {gastoEditar ? 'Editar Egreso' : 'Registro de Gastos'}
             </h2>
-            <div className={`mt-2 flex items-center gap-2 p-2 rounded-xl border ${idCajaAbierta ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-rose-50 border-rose-100 text-rose-700'}`}>
-                <div className={`w-1.5 h-1.5 rounded-full ${idCajaAbierta ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></div>
-                <span className="text-[9px] font-black uppercase tracking-tighter">
-                    {idCajaAbierta ? `Turno: ${fechaInicioCaja}` : 'Caja Cerrada'}
-                </span>
-            </div>
+            {!idCajaAbierta && (
+                <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-center shadow-inner mt-2">
+                    <p className="text-[10px] font-black text-amber-600 uppercase m-0 tracking-tighter animate-pulse">
+                        ⚠️ Debe abrir caja para registrar gastos
+                    </p>
+                </div>
+            )}
         </div>
 
         <form onSubmit={handleGuardar} className="flex-1 flex flex-col min-h-0 relative">
@@ -198,19 +200,19 @@ export default function Gastos() {
                 <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Categoría</label>
                     <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-                        <button type="button" onClick={() => setCategoria('Gasto General')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria !== 'Sueldo' ? 'bg-white shadow text-red-600' : 'text-gray-400'}`}>GENERAL</button>
-                        <button type="button" onClick={() => setCategoria('Sueldo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${categoria === 'Sueldo' ? 'bg-white shadow text-blue-600' : 'text-gray-400'}`}>SUELDO</button>
+                        <button type="button" disabled={!idCajaAbierta} onClick={() => setCategoria('Gasto General')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${categoria !== 'Sueldo' ? 'bg-white shadow text-red-600' : 'text-gray-400'}`}>GENERAL</button>
+                        <button type="button" disabled={!idCajaAbierta} onClick={() => setCategoria('Sueldo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${categoria === 'Sueldo' ? 'bg-white shadow text-blue-600' : 'text-gray-400'}`}>SUELDO</button>
                     </div>
                 </div>
 
-                {/* SELECCIÓN DE ORIGEN DEL DINERO (NUEVO) */}
+                {/* SELECCIÓN DE ORIGEN DEL DINERO */}
                 <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Origen del Dinero</label>
                     <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-                        <button type="button" onClick={() => setOrigen('Caja')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${origen === 'Caja' ? 'bg-white shadow text-emerald-600' : 'text-gray-400'}`}>
+                        <button type="button" disabled={!idCajaAbierta} onClick={() => setOrigen('Caja')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${origen === 'Caja' ? 'bg-white shadow text-emerald-600' : 'text-gray-400'}`}>
                             CAJA (Efectivo)
                         </button>
-                        <button type="button" onClick={() => setOrigen('Externo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${origen === 'Externo' ? 'bg-white shadow text-purple-600' : 'text-gray-400'}`}>
+                        <button type="button" disabled={!idCajaAbierta} onClick={() => setOrigen('Externo')} className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${origen === 'Externo' ? 'bg-white shadow text-purple-600' : 'text-gray-400'}`}>
                             EXTERNO
                         </button>
                     </div>
@@ -219,21 +221,21 @@ export default function Gastos() {
 
                 <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Descripción</label>
-                    <input type="text" className="w-full p-3 rounded-xl border border-gray-100 bg-slate-50 outline-none text-xs font-bold uppercase focus:ring-2 focus:ring-red-100 transition-all" placeholder="Ej: Compra verduras..." value={descripcion} onChange={e => setDescripcion(e.target.value)} required />
+                    <input type="text" disabled={!idCajaAbierta} className="w-full p-3 rounded-xl border border-gray-100 bg-slate-50 outline-none text-xs font-bold uppercase focus:ring-2 focus:ring-red-100 transition-all disabled:opacity-50 disabled:bg-gray-200 disabled:cursor-not-allowed" placeholder="Ej: Compra verduras..." value={descripcion} onChange={e => setDescripcion(e.target.value)} required />
                 </div>
 
                 {categoria === 'Sueldo' && (
                     <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2">
                         <label className="text-[10px] font-black text-blue-500 uppercase tracking-widest ml-1">Trabajador</label>
-                        <input type="text" className="w-full p-3 rounded-xl border border-blue-100 bg-blue-50 outline-none text-xs font-bold uppercase focus:ring-2 focus:ring-blue-100 transition-all" placeholder="Nombre trabajador..." value={trabajador} onChange={e => setTrabajador(e.target.value)} required />
+                        <input type="text" disabled={!idCajaAbierta} className="w-full p-3 rounded-xl border border-blue-100 bg-blue-50 outline-none text-xs font-bold uppercase focus:ring-2 focus:ring-blue-100 transition-all disabled:opacity-50 disabled:bg-gray-200 disabled:cursor-not-allowed" placeholder="Nombre trabajador..." value={trabajador} onChange={e => setTrabajador(e.target.value)} required />
                     </div>
                 )}
 
                 <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Monto $</label>
-                    <div className="flex items-center bg-slate-50 rounded-xl border border-gray-100 px-3 overflow-hidden focus-within:ring-2 focus-within:ring-red-100 transition-all">
+                    <div className={`flex items-center bg-slate-50 rounded-xl border border-gray-100 px-3 overflow-hidden focus-within:ring-2 focus-within:ring-red-100 transition-all ${!idCajaAbierta ? 'opacity-50 bg-gray-200 cursor-not-allowed' : ''}`}>
                         <span className="font-black text-gray-300 text-lg">$</span>
-                        <input type="text" className="w-full p-3 bg-transparent outline-none text-xl font-black text-slate-800" placeholder="0" value={monto} onChange={(e) => setMonto(e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, "."))} required />
+                        <input type="text" disabled={!idCajaAbierta} className="w-full p-3 bg-transparent outline-none text-xl font-black text-slate-800 disabled:cursor-not-allowed" placeholder="0" value={monto} onChange={(e) => setMonto(e.target.value.replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, "."))} required />
                     </div>
                 </div>
             </div>
@@ -241,7 +243,7 @@ export default function Gastos() {
             <div className="p-4 pt-2 flex-shrink-0 bg-white border-t border-gray-50">
                  <div className="flex gap-2">
                     {gastoEditar && <button type="button" onClick={limpiar} className="flex-1 py-4 rounded-2xl bg-slate-100 text-slate-400 hover:bg-slate-200 transition-all shadow-inner"><i className="bi bi-x-lg"></i></button>}
-                    <button type="submit" disabled={!idCajaAbierta} className={`flex-[4] py-4 rounded-2xl font-black text-white text-xs shadow-lg active:scale-95 transition-all uppercase tracking-widest ${gastoEditar ? 'bg-blue-600 shadow-blue-100' : 'bg-red-600 shadow-red-100'} disabled:opacity-30`}>
+                    <button type="submit" disabled={!idCajaAbierta} className={`flex-[4] py-4 rounded-2xl font-black text-white text-xs shadow-lg active:scale-95 transition-all uppercase tracking-widest ${gastoEditar ? 'bg-blue-600 shadow-blue-100' : 'bg-red-600 shadow-red-100'} disabled:opacity-30 disabled:cursor-not-allowed`}>
                         {gastoEditar ? 'Actualizar' : 'Guardar Egreso'}
                     </button>
                  </div>

@@ -65,8 +65,8 @@ const getLocalISODate = (dateInput) => {
   }).format(d);
 };
 
-// --- COMPONENTE TICKET (INCLUIDO PARA EVITAR ERROR DE IMPORTACIÓN) ---
-const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, horaEntrega, estadoPago, metodoPago, detallesPago }) => {
+// --- COMPONENTE TICKET ---
+const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, horaEntrega, estadoPago, metodoPago, detallesPago, descuento }) => {
     const fechaChile = fecha && fecha.includes('-') ? fecha.split('-').reverse().join('/') : fecha;
 
     // Lógica para el texto del pago al final
@@ -115,22 +115,41 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                                 {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600">↳ {item.observacion}</div>}
                             </td>
                             <td className="text-right whitespace-nowrap pl-1">
-                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString()}
+                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString('es-CL')}
                             </td>
                         </tr>
                     ))}
                     {tipoEntrega === 'REPARTO' && Number(costoDespacho) > 0 && (
                         <tr className="border-t border-dashed">
                             <td colSpan="2" className="pt-1 uppercase">Envío:</td>
-                            <td className="text-right pt-1">${Number(costoDespacho).toLocaleString()}</td>
+                            <td className="text-right pt-1">${Number(costoDespacho).toLocaleString('es-CL')}</td>
                         </tr>
                     )}
                 </tbody>
             </table>
             
-            <div className="border-t border-dashed border-gray-400 mt-2 pt-2 flex justify-between font-black text-sm">
-                <span>TOTAL:</span>
-                <span>${(Number(total) || 0).toLocaleString()}</span>
+            <div className="border-t border-dashed border-gray-400 mt-2 pt-2 text-sm">
+                {Number(descuento) > 0 ? (
+                    <div className="flex flex-col gap-1">
+                        <div className="flex justify-between font-bold text-[11px] opacity-75">
+                            <span>SUBTOTAL:</span>
+                            <span>${(Number(total) || 0).toLocaleString('es-CL')}</span>
+                        </div>
+                        <div className="flex justify-between font-black text-[11px] text-red-600 uppercase border border-red-200 bg-red-50 px-1 py-0.5 rounded">
+                            <span>DCTO 10%:</span>
+                            <span>-${Number(descuento).toLocaleString('es-CL')}</span>
+                        </div>
+                        <div className="flex justify-between font-black text-sm mt-1 border-t border-dashed pt-1">
+                            <span>TOTAL FINAL:</span>
+                            <span>${((Number(total) || 0) - Number(descuento)).toLocaleString('es-CL')}</span>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex justify-between font-black text-sm">
+                        <span>TOTAL:</span>
+                        <span>${(Number(total) || 0).toLocaleString('es-CL')}</span>
+                    </div>
+                )}
             </div>
 
             {(descripcion || (tipoEntrega === 'REPARTO' && notaPersonal)) && (
@@ -186,7 +205,6 @@ export default function HistorialPedidos({ onEditar, user }) {
     setCargando(true);
     
     const hoy = getLocalISODate();
-    // Usamos collection(db, colOrdenes) directamente para apuntar a la raíz
     const q = query(collection(db, colOrdenes), where("fechaString", "==", fechaFiltro));
     
     let unsubscribe;
@@ -332,12 +350,6 @@ export default function HistorialPedidos({ onEditar, user }) {
         }
 
         notificar(`PAGO REGISTRADO CORRECTAMENTE`, "success");
-        
-        // --- MODIFICACIÓN: SE ELIMINÓ LA IMPRESIÓN AUTOMÁTICA AL COBRAR EN HISTORIAL ---
-        /* ejecutarImpresionAutomatica({
-            ...p,
-            ...datosPago 
-        }); */
 
     } catch (err) {
         console.error("Error sincronización pago:", err);
@@ -401,8 +413,10 @@ export default function HistorialPedidos({ onEditar, user }) {
 
   return (
     <div className="p-6 h-full overflow-y-auto bg-slate-100 font-sans text-gray-800 relative">
+      
+      {/* --- NOTIFICACIÓN MOVIDA A LA ESQUINA INFERIOR DERECHA --- */}
       {notificacion.mostrar && (
-        <div className={`fixed top-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
+        <div className={`fixed bottom-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🚫' : '✅'}</span>
             <div>
                 <h4 className="font-black uppercase text-xs opacity-75">{notificacion.tipo === 'error' ? 'Error' : 'Éxito'}</h4>
