@@ -53,6 +53,7 @@ export default function Inventario({ user }) {
   const [filtro, setFiltro] = useState('todos'); 
   const [busqueda, setBusqueda] = useState(''); 
   const [notificacion, setNotificacion] = useState({ mostrar: false, mensaje: '', tipo: '' });
+  const [libsReady, setLibsReady] = useState(false); // Estado para las librerías de PDF
 
   // --- ESTADOS PARA LA EDICIÓN ---
   const [editandoId, setEditandoId] = useState(null);
@@ -66,6 +67,22 @@ export default function Inventario({ user }) {
     setNotificacion({ mostrar: true, mensaje, tipo });
     setTimeout(() => setNotificacion({ mostrar: false, mensaje: '', tipo: '' }), 3000);
   };
+
+  // --- CARGAR LIBRERÍAS DE PDF ---
+  useEffect(() => {
+    const scripts = [
+        { id: 'jspdf-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js' },
+        { id: 'jspdf-autotable-script', src: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js' }
+    ];
+    const loadScript = (data) => new Promise((resolve) => {
+        if (document.getElementById(data.id)) return resolve();
+        const script = document.createElement('script');
+        script.id = data.id; script.src = data.src; script.async = false;
+        script.onload = () => resolve();
+        document.head.appendChild(script);
+    });
+    Promise.all(scripts.map(loadScript)).then(() => setLibsReady(true));
+  }, []);
 
   // --- CARGAR DATOS (OPTIMIZADO) ---
   useEffect(() => {
@@ -134,7 +151,7 @@ export default function Inventario({ user }) {
     setEditandoId(null);
   };
 
-  // --- LÓGICA DE IMPRESIÓN ---
+  // --- LÓGICA DE IMPRESIÓN FÍSICA ---
   const imprimirListaCompras = () => {
     const aComprar = insumos.filter(i => i.cantidad <= 0 || i.esUrgente);
 
@@ -166,6 +183,73 @@ export default function Inventario({ user }) {
       } else {
         window.print(); 
       }
+  };
+
+  // --- LÓGICA PARA EXPORTAR A PDF ---
+  const generarPDF = () => {
+    if (!libsReady) {
+        notificar("Librerías PDF cargando...", "error");
+        return;
+    }
+    
+    if (insumos.length === 0) {
+        notificar("INVENTARIO VACÍO", "error");
+        return;
+    }
+
+    notificar("Generando PDF...", "success");
+    
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF();
+    
+    const fechaActual = new Date().toLocaleDateString('es-CL');
+    
+    // Título
+    pdf.setFontSize(16);
+    pdf.setFont("helvetica", "bold");
+    pdf.text("ISAKARI SUSHI - REPORTE DE INVENTARIO", 105, 15, { align: 'center' });
+    
+    // Subtítulo (Fecha)
+    pdf.setFontSize(10);
+    pdf.setFont("helvetica", "normal");
+    pdf.text(`Fecha de Reporte: ${fechaActual}`, 15, 25);
+    
+    // Formatear datos para la tabla
+    const tableData = insumos.map(item => [
+        item.nombre,
+        item.cantidad.toString(),
+        item.unidad.toUpperCase(),
+        item.esUrgente ? 'SÍ' : 'NO'
+    ]);
+
+    // Generar la tabla
+    pdf.autoTable({
+        startY: 30,
+        head: [['Insumo', 'Cantidad', 'Unidad', 'Urgente']],
+        body: tableData,
+        theme: 'striped',
+        headStyles: { fillColor: [44, 62, 80] },
+        styles: { fontSize: 10, cellPadding: 3 },
+        columnStyles: {
+            1: { halign: 'center', cellWidth: 30 },
+            2: { halign: 'center', cellWidth: 30 },
+            3: { halign: 'center', cellWidth: 30 }
+        },
+        // Marcar en rojo los urgentes o con cantidad 0
+        didParseCell: function(data) {
+            if (data.section === 'body') {
+                const esUrgente = data.row.raw[3] === 'SÍ';
+                const cantidadCero = data.row.raw[1] === '0';
+                if (esUrgente || cantidadCero) {
+                    data.cell.styles.textColor = [220, 38, 38]; // Rojo oscuro
+                    data.cell.styles.fontStyle = 'bold';
+                }
+            }
+        }
+    });
+
+    // Guardar archivo
+    pdf.save(`Inventario_Isakari_${fechaActual.replace(/\//g, '-')}.pdf`);
   };
 
   // --- FILTRADO VISUAL ---
@@ -201,6 +285,13 @@ export default function Inventario({ user }) {
         </div>
         
         <div className="flex gap-2 flex-wrap">
+            <button 
+            onClick={generarPDF}
+            className="bg-red-600 text-white px-5 py-3 rounded-2xl font-black uppercase text-[10px] shadow-lg hover:bg-red-700 active:scale-95 transition-all flex items-center gap-2"
+            >
+            <i className="bi bi-file-earmark-pdf-fill text-lg"></i> PDF
+            </button>
+
             <button 
             onClick={imprimirInventarioCompleto}
             className="bg-slate-700 text-white px-5 py-3 rounded-2xl font-black uppercase text-[10px] shadow-lg hover:bg-slate-900 active:scale-95 transition-all flex items-center gap-2"
