@@ -231,7 +231,15 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         if (parseInt(data.costoDespacho) > 0) {
           ticket += ALIGN_RIGHT + `Envio: ${fmt(data.costoDespacho)}\n`;
         }
-        ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(data.total)}\n` + BOLD_OFF;
+
+        // --- LÓGICA DE DESCUENTO EN IMPRESORA FÍSICA ---
+        if (data.descuento && parseInt(data.descuento) > 0) {
+            ticket += ALIGN_RIGHT + `Subtotal: ${fmt(data.total)}\n`;
+            ticket += ALIGN_RIGHT + `DCTO 10%: -${fmt(data.descuento)}\n`;
+            ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL FINAL: ${fmt(data.total - data.descuento)}\n` + BOLD_OFF;
+        } else {
+            ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(data.total)}\n` + BOLD_OFF;
+        }
     
         if(data.tipoEntrega === 'REPARTO') {
           ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
@@ -267,7 +275,8 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
       const tempPath = path.join(os.tmpdir(), 'ticket_raw.bin');
       fs.writeFileSync(tempPath, ticket, { encoding: 'binary' });
 
-      exec(`lp -d impresora_termica -o raw "${tempPath}"`, (error) => {
+      // --- CAMBIO DE IMPRESORA AQUÍ ---
+      exec(`lp -d impresora_pos80 -o raw "${tempPath}"`, (error) => {
         if (error) console.error(`❌ Error lp: ${error.message}`);
       });
 
