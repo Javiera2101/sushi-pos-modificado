@@ -64,7 +64,7 @@ if (!gotTheLock) {
   app.whenReady().then(createWindow);
 }
 
-// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS) MEJORADA
+// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS) MEJORADA PARA 80MM (48 CARACTERES)
 ipcMain.on('imprimir-ticket-raw', (event, data) => {
   const ESC = '\x1B';
   const GS = '\x1D';
@@ -110,9 +110,9 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
   };
 
   /**
-   * FUNCIÓN DE AJUSTE INTELIGENTE (Word Wrap)
+   * FUNCIÓN DE AJUSTE INTELIGENTE (Word Wrap) PARA 80mm
    */
-  const wrapText = (text, limit = 32) => {
+  const wrapText = (text, limit = 48) => {
     if (!text) return "";
     const words = text.split(' ');
     let lines = [];
@@ -139,6 +139,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
   };
 
   let ticket = INIT;
+  const SEPARATOR = "------------------------------------------------\n"; // 48 guiones para 80mm
 
   try {
       // --- CASO A: INVENTARIO (LISTA LIMPIA) ---
@@ -146,16 +147,17 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
         ticket += "CONTROL DE INVENTARIO\n";
         ticket += `FECHA: ${data.fecha || ''}\n`;
-        ticket += "--------------------------------\n\n";
+        ticket += SEPARATOR + "\n";
         ticket += ALIGN_LEFT;
 
         const items = Array.isArray(data.items) ? data.items : [];
         items.forEach(insumo => {
           const nombre = limpiarTexto(insumo);
-          ticket += nombre.padEnd(22, '.') + " __\n";
+          // Aumentamos a 40 para ocupar el espacio de 80mm
+          ticket += nombre.padEnd(40, '.') + " __\n";
         });
 
-        ticket += "\n--------------------------------\n";
+        ticket += "\n" + SEPARATOR;
         ticket += ALIGN_CENTER + "FIN DEL REPORTE\n\n\n\n" + CUT;
       } 
       // --- CASO B: VENTA (CON AJUSTE DE PALABRAS MEJORADO) ---
@@ -164,14 +166,15 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
         ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
         ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
-        ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 22)}\n`;
+        // Ajustamos a 38 caracteres para el cliente
+        ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 38)}\n`;
         ticket += `Fecha: ${data.fecha || ''}\n`;
         
         if (data.horaEntrega) {
             ticket += BOLD_ON + `ENTREGA: ${data.horaEntrega}\n` + BOLD_OFF;
         }
         
-        ticket += "--------------------------------\n";
+        ticket += SEPARATOR;
         ticket += ALIGN_LEFT;
 
         const orden = Array.isArray(data.orden) ? data.orden : [];
@@ -180,7 +183,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
           
           // Imprimir Nombre y Cantidad
           const textoCompleto = `${item.cantidad} x ${nombreLimpio}`;
-          ticket += BOLD_ON + wrapText(textoCompleto, 32) + BOLD_OFF + "\n";
+          ticket += BOLD_ON + wrapText(textoCompleto, 48) + BOLD_OFF + "\n";
 
           // --- FILTRO ROBUSTO PARA NO IMPRIMIR INGREDIENTES LARGOS ---
           // Detectamos palabras clave que indican "Combo" o "Mix"
@@ -207,7 +210,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
           // Imprimimos descripción SOLO si no es "Largo" y tiene texto válido
           if (descTexto && descTexto.trim() !== "") {
-            ticket += wrapText(limpiarTexto(descTexto), 32) + "\n";
+            ticket += wrapText(limpiarTexto(descTexto), 48) + "\n";
           }
           
           // Notas (Observaciones) - Siempre se intentan imprimir, limpiando caracteres raros
@@ -220,14 +223,14 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
             }
             const obsLimpia = limpiarTexto(obsTexto);
             if (obsLimpia.trim() !== "") {
-                ticket += wrapText(`  * ${obsLimpia}`, 30) + "\n";
+                ticket += wrapText(`  * ${obsLimpia}`, 46) + "\n";
             }
           }
           
           ticket += ALIGN_RIGHT + `${fmt(item.precio * item.cantidad)}\n` + ALIGN_LEFT;
         });
 
-        ticket += "--------------------------------\n";
+        ticket += SEPARATOR;
         if (parseInt(data.costoDespacho) > 0) {
           ticket += ALIGN_RIGHT + `Envio: ${fmt(data.costoDespacho)}\n`;
         }
@@ -243,7 +246,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
     
         if(data.tipoEntrega === 'REPARTO') {
           ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
-          const dirLimpia = wrapText(`Dir: ${limpiarTexto(data.direccion)}`, 32);
+          const dirLimpia = wrapText(`Dir: ${limpiarTexto(data.direccion)}`, 48);
           ticket += `${dirLimpia}\nTel: ${data.telefono || ''}\n`;
         } else {
           ticket += "\n" + ALIGN_CENTER + "*** RETIRO EN LOCAL ***\n";
@@ -251,7 +254,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
         if (data.descripcion && data.descripcion.trim() !== "") {
           ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBSERVACIONES:\n" + BOLD_OFF;
-          ticket += wrapText(limpiarTexto(data.descripcion), 32) + "\n";
+          ticket += wrapText(limpiarTexto(data.descripcion), 48) + "\n";
         }
 
         let textoPago = "PAGO PENDIENTE";
@@ -264,9 +267,9 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
             }
         }
 
-        ticket += ALIGN_CENTER + "\n--------------------------------\n";
+        ticket += ALIGN_CENTER + "\n" + SEPARATOR;
         ticket += BOLD_ON + textoPago + BOLD_OFF + "\n";
-        ticket += "--------------------------------\n";
+        ticket += SEPARATOR;
 
         ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
       }
