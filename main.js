@@ -12,7 +12,7 @@ app.disableHardwareAcceleration();
 
 let mainWindow;
 
-// 2. PROTECCIÓN CONTRA INSTANCIA MÚLTIPLE (Single Instance Lock)
+// 2. PROTECCIÓN CONTRA INSTANCIA MÚLTIPLE
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
@@ -64,7 +64,7 @@ if (!gotTheLock) {
   app.whenReady().then(createWindow);
 }
 
-// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS) MEJORADA PARA 80MM (48 CARACTERES)
+// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS) PARA 80MM (LINUX)
 ipcMain.on('imprimir-ticket-raw', (event, data) => {
   const ESC = '\x1B';
   const GS = '\x1D';
@@ -79,39 +79,25 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
   const fmt = (num) => '$' + parseInt(num || 0).toLocaleString('es-CL');
   
-  // FUNCIÓN DE LIMPIEZA AGRESIVA (ANTI-ERROR DE IMPRESORA)
   const limpiarTexto = (input) => {
     if (!input) return "";
-    
     let str = input;
-    
-    // Si es un array simple, lo unimos
     if (Array.isArray(input)) {
-        // Intentamos mapear si son objetos con propiedad 'nombre' o 'label'
         if (input.length > 0 && typeof input[0] === 'object') {
             str = input.map(i => i.nombre || i.name || i.label || JSON.stringify(i)).join(" ");
         } else {
             str = input.join(" ");
         }
     }
-    
-    // Aseguramos string
     if (typeof str !== 'string') {
         try { str = String(str); } catch(e) { str = ""; }
     }
-
-    // 1. Normalizar caracteres (tildes)
-    // 2. Eliminar todo lo que NO sea ASCII estándar (Emojis, símbolos raros que bloquean impresoras)
-    // 3. Convertir a Mayúsculas
     return str.normalize("NFD")
-              .replace(/[\u0300-\u036f]/g, "") // Quitar tildes
-              .replace(/[^\x20-\x7E]/g, "")    // CRÍTICO: Eliminar caracteres no imprimibles/raros
+              .replace(/[\u0300-\u036f]/g, "") 
+              .replace(/[^\x20-\x7E]/g, "")    
               .toUpperCase();
   };
 
-  /**
-   * FUNCIÓN DE AJUSTE INTELIGENTE (Word Wrap) PARA 80mm
-   */
   const wrapText = (text, limit = 48) => {
     if (!text) return "";
     const words = text.split(' ');
@@ -139,10 +125,10 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
   };
 
   let ticket = INIT;
-  const SEPARATOR = "------------------------------------------------\n"; // 48 guiones para 80mm
+  const ANCHO = 48; // Estándar para 80mm
+  const SEPARATOR = "-".repeat(ANCHO) + "\n";
 
   try {
-      // --- CASO A: INVENTARIO (LISTA LIMPIA) ---
       if (data.tipo === 'INVENTARIO') {
         ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
         ticket += "CONTROL DE INVENTARIO\n";
@@ -153,20 +139,18 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         const items = Array.isArray(data.items) ? data.items : [];
         items.forEach(insumo => {
           const nombre = limpiarTexto(insumo);
-          // Aumentamos a 40 para ocupar el espacio de 80mm
           ticket += nombre.padEnd(40, '.') + " __\n";
         });
 
         ticket += "\n" + SEPARATOR;
         ticket += ALIGN_CENTER + "FIN DEL REPORTE\n\n\n\n" + CUT;
       } 
-      // --- CASO B: VENTA (CON AJUSTE DE PALABRAS MEJORADO) ---
       else {
         ticket += OPEN_DRAWER;
         ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
         ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
         ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
-        // Ajustamos a 38 caracteres para el cliente
+        
         ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 38)}\n`;
         ticket += `Fecha: ${data.fecha || ''}\n`;
         
@@ -180,24 +164,14 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         const orden = Array.isArray(data.orden) ? data.orden : [];
         orden.forEach(item => {
           const nombreLimpio = limpiarTexto(item.nombre);
-          
-          // Imprimir Nombre y Cantidad
           const textoCompleto = `${item.cantidad} x ${nombreLimpio}`;
-          ticket += BOLD_ON + wrapText(textoCompleto, 48) + BOLD_OFF + "\n";
-
-          // --- FILTRO ROBUSTO PARA NO IMPRIMIR INGREDIENTES LARGOS ---
-          // Detectamos palabras clave que indican "Combo" o "Mix"
-          const esProductoLargo = nombreLimpio.includes("MIXTO") || 
-                                  nombreLimpio.includes("PREMIUM") || 
-                                  nombreLimpio.includes("PROMO") || 
-                                  nombreLimpio.includes("TABLA") || 
-                                  nombreLimpio.includes("COMBINADO");
-
-          // Procesamiento seguro de descripción
-          let descTexto = "";
           
+          ticket += BOLD_ON + wrapText(textoCompleto, ANCHO) + BOLD_OFF + "\n";
+
+          const esProductoLargo = nombreLimpio.includes("MIXTO") || nombreLimpio.includes("PREMIUM") || nombreLimpio.includes("PROMO") || nombreLimpio.includes("TABLA") || nombreLimpio.includes("COMBINADO");
+
+          let descTexto = "";
           if (!esProductoLargo && item.descripcion) {
-             // Manejo seguro de Arrays y Objetos para evitar errores
              if (Array.isArray(item.descripcion)) {
                  descTexto = item.descripcion.map(d => {
                      if (typeof d === 'object') return d.nombre || d.name || '';
@@ -208,19 +182,12 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
              }
           }
 
-          // Imprimimos descripción SOLO si no es "Largo" y tiene texto válido
           if (descTexto && descTexto.trim() !== "") {
-            ticket += wrapText(limpiarTexto(descTexto), 48) + "\n";
+            ticket += wrapText(limpiarTexto(descTexto), ANCHO) + "\n";
           }
           
-          // Notas (Observaciones) - Siempre se intentan imprimir, limpiando caracteres raros
           if (item.observacion) {
-            let obsTexto = "";
-            if (typeof item.observacion === 'object') {
-                 obsTexto = JSON.stringify(item.observacion); // Fallback por si acaso
-            } else {
-                 obsTexto = String(item.observacion);
-            }
+            let obsTexto = String(item.observacion);
             const obsLimpia = limpiarTexto(obsTexto);
             if (obsLimpia.trim() !== "") {
                 ticket += wrapText(`  * ${obsLimpia}`, 46) + "\n";
@@ -235,7 +202,6 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
           ticket += ALIGN_RIGHT + `Envio: ${fmt(data.costoDespacho)}\n`;
         }
 
-        // --- LÓGICA DE DESCUENTO EN IMPRESORA FÍSICA ---
         if (data.descuento && parseInt(data.descuento) > 0) {
             ticket += ALIGN_RIGHT + `Subtotal: ${fmt(data.total)}\n`;
             ticket += ALIGN_RIGHT + `DCTO 10%: -${fmt(data.descuento)}\n`;
@@ -246,7 +212,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
     
         if(data.tipoEntrega === 'REPARTO') {
           ticket += "\n" + ALIGN_LEFT + BOLD_ON + "DATOS REPARTO:\n" + BOLD_OFF;
-          const dirLimpia = wrapText(`Dir: ${limpiarTexto(data.direccion)}`, 48);
+          const dirLimpia = wrapText(`Dir: ${limpiarTexto(data.direccion)}`, ANCHO);
           ticket += `${dirLimpia}\nTel: ${data.telefono || ''}\n`;
         } else {
           ticket += "\n" + ALIGN_CENTER + "*** RETIRO EN LOCAL ***\n";
@@ -254,7 +220,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
         if (data.descripcion && data.descripcion.trim() !== "") {
           ticket += ALIGN_LEFT + "\n" + BOLD_ON + "OBSERVACIONES:\n" + BOLD_OFF;
-          ticket += wrapText(limpiarTexto(data.descripcion), 48) + "\n";
+          ticket += wrapText(limpiarTexto(data.descripcion), ANCHO) + "\n";
         }
 
         let textoPago = "PAGO PENDIENTE";
@@ -274,13 +240,26 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
       }
 
-      // Guardar y ejecutar comando de impresión
-      const tempPath = path.join(os.tmpdir(), 'ticket_raw.bin');
+      const uniqueId = Date.now();
+      const tempPath = path.join(os.tmpdir(), `ticket_80_${uniqueId}.bin`);
       fs.writeFileSync(tempPath, ticket, { encoding: 'binary' });
 
-      // --- CAMBIO DE IMPRESORA AQUÍ ---
-      exec(`lp -d impresora_pos80 -o raw "${tempPath}"`, (error) => {
-        if (error) console.error(`❌ Error lp: ${error.message}`);
+      // COMANDO DE IMPRESIÓN SEGURO PARA LINUX EMPAQUETADO
+      // Usamos la ruta absoluta porque los íconos de escritorio no suelen heredar el PATH
+      const comando = `/usr/bin/lp -d impresora_pos80 -o raw "${tempPath}"`;
+
+      exec(comando, (error) => {
+        if (error) {
+            console.error(`❌ Error con /usr/bin/lp: ${error.message}`);
+            // Fallback al comando lp simple por si el sistema lo tiene en otra ruta
+            exec(`lp -d impresora_pos80 -o raw "${tempPath}"`, (err2) => {
+                if (err2) console.error("❌ Fallback error:", err2.message);
+                setTimeout(() => { try { fs.unlinkSync(tempPath); } catch(e) {} }, 5000);
+            });
+        } else {
+            console.log("✅ Ticket impreso con éxito en Linux");
+            setTimeout(() => { try { fs.unlinkSync(tempPath); } catch(e) {} }, 5000);
+        }
       });
 
   } catch (errGlobal) {
