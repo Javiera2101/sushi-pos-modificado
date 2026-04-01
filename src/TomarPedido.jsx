@@ -68,7 +68,7 @@ const getCurrentTimeForInput = () => {
     return `${hours}:${minutes}`;
 };
 
-const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, horaEntrega, estadoPago, metodoPago, detallesPago }) => {
+const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente, direccion, telefono, descripcion, notaPersonal, costoDespacho, horaEntrega, estadoPago, metodoPago, detallesPago, descuento }) => {
     const fechaChile = fecha && fecha.includes('-') ? fecha.split('-').reverse().join('/') : fecha;
     let textoPago = "PAGO PENDIENTE";
     let estiloPago = "border-black"; 
@@ -114,22 +114,41 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                                 {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600">↳ {item.observacion}</div>}
                             </td>
                             <td className="text-right whitespace-nowrap pl-1">
-                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString()}
+                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString('es-CL')}
                             </td>
                         </tr>
                     ))}
                     {tipoEntrega === 'REPARTO' && Number(costoDespacho) > 0 && (
                         <tr className="border-t border-dashed">
                             <td colSpan="2" className="pt-1 uppercase">Envío:</td>
-                            <td className="text-right pt-1">${Number(costoDespacho).toLocaleString()}</td>
+                            <td className="text-right pt-1">${Number(costoDespacho).toLocaleString('es-CL')}</td>
                         </tr>
                     )}
                 </tbody>
             </table>
             
-            <div className="border-t border-dashed border-gray-400 mt-2 pt-2 flex justify-between font-black text-sm">
-                <span>TOTAL:</span>
-                <span>${(Number(total) || 0).toLocaleString()}</span>
+            <div className="border-t border-dashed border-gray-400 mt-2 pt-2 text-sm">
+                {Number(descuento) > 0 ? (
+                    <div className="flex flex-col gap-1">
+                        <div className="flex justify-between font-bold text-[11px] opacity-75">
+                            <span>SUBTOTAL:</span>
+                            <span>${(Number(total) || 0).toLocaleString('es-CL')}</span>
+                        </div>
+                        <div className="flex justify-between font-black text-[11px] text-red-600 uppercase border border-red-200 bg-red-50 px-1 py-0.5 rounded">
+                            <span>DCTO 10%:</span>
+                            <span>-${Number(descuento).toLocaleString('es-CL')}</span>
+                        </div>
+                        <div className="flex justify-between font-black text-sm mt-1 border-t border-dashed pt-1">
+                            <span>TOTAL FINAL:</span>
+                            <span>${((Number(total) || 0) - Number(descuento)).toLocaleString('es-CL')}</span>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex justify-between font-black text-sm">
+                        <span>TOTAL:</span>
+                        <span>${(Number(total) || 0).toLocaleString('es-CL')}</span>
+                    </div>
+                )}
             </div>
 
             {(descripcion || (tipoEntrega === 'REPARTO' && notaPersonal)) && (
@@ -169,7 +188,10 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   
   const [horaEntrega, setHoraEntrega] = useState(getCurrentTimeForInput());
   const [mostrarModalPago, setMostrarModalPago] = useState(false);
+  
+  // Estados para el pago
   const [pagoTemporal, setPagoTemporal] = useState(null); 
+  const [pagoRemovido, setPagoRemovido] = useState(false);
   
   const [modoPago, setModoPago] = useState('unico'); 
   const [metodoUnico, setMetodoUnico] = useState('Efectivo');
@@ -182,20 +204,21 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
   const [ultimoPedidoParaImprimir, setUltimoPedidoParaImprimir] = useState(null); 
   
-  const cajaAbierta = cajaAbiertaGlobal !== undefined ? cajaAbiertaGlobal : true;
+  // Estado local para CAJA
+  const [cajaAbierta, setCajaAbierta] = useState(cajaAbiertaGlobal || false);
 
   const esPrueba = user?.email === "prueba@isakari.com";
   const COL_ORDENES = esPrueba ? "ordenes_pruebas" : "ordenes";
   const COL_MENU = "menu";
   const COL_MOVIMIENTOS = esPrueba ? "movimientos_pruebas" : "movimientos";
+  const COL_CAJAS = esPrueba ? "cajas_pruebas" : "cajas";
   
-  const inputStyle = "w-full p-4 rounded-2xl border-2 border-gray-100 bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-black uppercase transition-all shadow-sm placeholder:text-gray-300";
+  const inputStyle = "w-full p-4 rounded-2xl border-2 border-gray-100 bg-white focus:ring-2 focus:ring-red-100 outline-none text-sm font-black uppercase transition-all shadow-sm placeholder:text-gray-300 disabled:opacity-50 disabled:bg-gray-100 disabled:cursor-not-allowed";
 
   const getRawNumber = (v) => Number(v.toString().replace(/\./g, '')) || 0;
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
   const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-  // --- FUNCIÓN LIMPIADORA CENTRALIZADA ---
   const limpiarFormulario = () => {
     setOrden([]);
     setNombreCliente('');
@@ -207,8 +230,20 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     setDescripcionGeneral('');
     setHoraEntrega(getCurrentTimeForInput());
     setPagoTemporal(null);
+    setPagoRemovido(false);
   };
 
+  // 1. Escuchar Caja Localmente
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, COL_CAJAS), where("estado", "==", "abierta"));
+    const unsubscribe = onSnapshot(q, (snap) => {
+        setCajaAbierta(!snap.empty);
+    }, (err) => console.error("Error validando caja:", err));
+    return () => unsubscribe();
+  }, [user, COL_CAJAS]);
+
+  // 2. Cargar Menú
   useEffect(() => {
     if (!user) return;
     const colRef = collection(db, COL_MENU);
@@ -223,6 +258,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, [user, COL_MENU]);
 
+  // 3. Contador de Pedidos
   useEffect(() => {
     if (!user || ordenAEditar) return;
     const hoy = getLocalISODate();
@@ -241,6 +277,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     return () => unsubscribe();
   }, [user, ordenAEditar, COL_ORDENES]);
 
+  // 4. Edición de Orden
   useEffect(() => {
     if (ordenAEditar) {
       setOrden(ordenAEditar.items || []);
@@ -255,8 +292,8 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       setHoraPedido(ordenAEditar.hora_pedido || '');
       setHoraEntrega(ordenAEditar.hora_entrega || getCurrentTimeForInput());
       setPagoTemporal(null); 
+      setPagoRemovido(false);
     } else {
-      // SI ORDEN A EDITAR ES NULO, LIMPIAMOS COMPLETAMENTE LA MEMORIA LOCAL
       limpiarFormulario();
     }
   }, [ordenAEditar]);
@@ -342,6 +379,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     };
 
     setPagoTemporal(datosPago);
+    setPagoRemovido(false);
     setMostrarModalPago(false); 
     notificar("¡COBRO REGISTRADO! GUARDE EL PEDIDO PARA FINALIZAR.", "success");
   };
@@ -360,7 +398,9 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     const hoy = getLocalISODate();
     
     let sourcePago = null;
-    if (pagoTemporal) {
+    if (pagoRemovido) {
+        sourcePago = null;
+    } else if (pagoTemporal) {
         sourcePago = pagoTemporal;
     } else if (ordenAEditar && String(ordenAEditar.estado_pago).toLowerCase() === 'pagado') {
         sourcePago = ordenAEditar;
@@ -403,6 +443,10 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         usuario_id: user?.uid || "anonimo"
     };
 
+    ejecutarImpresion(datos);
+    
+    setMostrarModalPago(false); 
+
     try {
         const colRef = collection(db, COL_ORDENES);
         let pedidoIdGuardado;
@@ -411,20 +455,13 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             await updateDoc(doc(db, COL_ORDENES, ordenAEditar.id), datos);
             pedidoIdGuardado = ordenAEditar.id;
             notificar(`PEDIDO #${datos.numero_pedido} ACTUALIZADO CORRECTAMENTE`, "success"); 
-            
-            // LIMPIEZA FORZOSA TRAS ACTUALIZAR
-            limpiarFormulario();
-            
-            if (onTerminarEdicion) onTerminarEdicion();
         } else {
             const docRef = await addDoc(colRef, datos);
             pedidoIdGuardado = docRef.id;
             notificar(`PEDIDO #${datos.numero_pedido} GUARDADO EXITOSAMENTE`, "success"); 
-            
-            // LIMPIEZA FORZOSA TRAS GUARDAR NUEVO
-            limpiarFormulario();
         }
 
+        // Si se pagó, registrar el ingreso
         if (pagoTemporal && detallesPago && detallesPago.length > 0) {
             const movRef = collection(db, COL_MOVIMIENTOS);
             for (const detalle of detallesPago) {
@@ -441,12 +478,30 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             }
         }
 
-        setPagoTemporal(null);
-        ejecutarImpresion(datos);
-        setMostrarModalPago(false); 
+        // Si se anuló un pago previamente registrado
+        if (pagoRemovido && ordenAEditar && String(ordenAEditar.estado_pago).toLowerCase() === 'pagado') {
+            const movRef = collection(db, COL_MOVIMIENTOS);
+            await addDoc(movRef, {
+                tipo: 'egreso',
+                categoria: 'ANULACION',
+                monto: ordenAEditar.total_pagado || ordenAEditar.total,
+                descripcion: `ANULACIÓN PAGO PEDIDO #${datos.numero_pedido}`,
+                metodo: ordenAEditar.metodo_pago || 'Otro',
+                fecha: Timestamp.now(),
+                usuario_id: user?.uid || 'anonimo',
+                pedido_id: pedidoIdGuardado
+            });
+        }
+
     } catch (error) {
         console.error("Error al procesar orden:", error);
-        notificar("ERROR AL GUARDAR EL PEDIDO", "error");
+        notificar("PEDIDO EN COLA OFFLINE (Sincronizará automáticamente)", "success");
+    } finally {
+        if (ordenAEditar) {
+            if (onTerminarEdicion) onTerminarEdicion();
+        } else {
+            limpiarFormulario();
+        }
     }
   };
 
@@ -458,10 +513,12 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   };
 
   const ajustarCantidad = (id, delta) => {
+    if (!cajaAbierta) return;
     setOrden(prev => prev.map(item => item.id === id ? { ...item, cantidad: Math.max(0, item.cantidad + delta) } : item).filter(item => item.cantidad > 0));
   };
 
   const handleNotaItemChange = (idx, valor) => {
+    if (!cajaAbierta) return;
     setOrden(prev => {
         const nuevaOrden = [...prev];
         nuevaOrden[idx] = { ...nuevaOrden[idx], observacion: valor.toUpperCase() };
@@ -471,13 +528,15 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
   const categorias = [...new Set(menu.map(m => m.categoria))].filter(Boolean);
 
+  const isPagado = pagoTemporal || (ordenAEditar && String(ordenAEditar.estado_pago).toLowerCase() === 'pagado' && !pagoRemovido);
+
   if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-300 animate-pulse bg-slate-50 italic tracking-widest">Iniciando Isakari POS...</div>;
 
   return (
     <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative main-app-container">
-      {/* NOTIFICACIÓN FLOTANTE */}
+      {/* NOTIFICACIÓN FLOTANTE EN ESQUINA INFERIOR DERECHA (BOTTOM-4) */}
       {notificacion.mostrar && (
-        <div className={`fixed top-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
+        <div className={`fixed bottom-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-emerald-500 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🚫' : '✅'}</span>
             <div>
                 <h4 className="font-black uppercase text-xs opacity-75">{notificacion.tipo === 'error' ? 'Error' : 'Éxito'}</h4>
@@ -505,9 +564,9 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                         setMontosMixtos({ Efectivo: '', Transferencia: '', Débito: '' });
                     }} 
                     disabled={!cajaAbierta || orden.length === 0}
-                    className={`${!cajaAbierta || orden.length === 0 ? 'bg-slate-300 cursor-not-allowed' : (pagoTemporal ? 'bg-emerald-500 text-white ring-2 ring-emerald-300' : 'bg-green-600 hover:bg-green-700 active:scale-95 text-white')} px-3 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg transition-all`}
+                    className={`${!cajaAbierta || orden.length === 0 ? 'bg-slate-300 cursor-not-allowed' : (isPagado ? 'bg-emerald-500 text-white ring-2 ring-emerald-300' : 'bg-green-600 hover:bg-green-700 active:scale-95 text-white')} px-3 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg transition-all`}
                   >
-                      {pagoTemporal ? '¡COBRADO! (LISTO)' : 'COBRAR'}
+                      {isPagado ? '¡COBRADO! (VER)' : 'COBRAR'}
                   </button>
                   <button 
                     onClick={() => enviarCocina()} 
@@ -519,27 +578,34 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               </div>
            </div>
 
-           {!cajaAbierta && <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-center"><p className="text-[10px] font-black text-amber-600 uppercase m-0 tracking-tighter">⚠️ Debe abrir caja para comenzar a tomar pedidos</p></div>}
+           {/* MENSAJE DE ADVERTENCIA CAJA CERRADA */}
+           {!cajaAbierta && (
+               <div className="bg-amber-50 border border-amber-200 p-2 rounded-xl text-center shadow-inner">
+                   <p className="text-[10px] font-black text-amber-600 uppercase m-0 tracking-tighter animate-pulse">
+                       ⚠️ Debe abrir caja para agendar pedidos
+                   </p>
+               </div>
+           )}
            
-           <input type="text" placeholder="NOMBRE CLIENTE *" className={inputStyle} value={nombreCliente} onChange={e => setNombreCliente(e.target.value)} />
+           <input type="text" placeholder="NOMBRE CLIENTE *" className={inputStyle} value={nombreCliente} onChange={e => setNombreCliente(e.target.value)} disabled={!cajaAbierta} />
            
            <div className="flex gap-2">
              <div className="flex bg-slate-100 rounded-xl p-1 gap-1 flex-1">
-               <button className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all ${tipoEntrega === 'LOCAL' ? 'bg-white shadow-sm text-red-600' : 'text-gray-400'}`} onClick={() => { setTipoEntrega('LOCAL'); setCostoDespacho(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); }}>LOCAL</button>
-               <button className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all ${tipoEntrega === 'REPARTO' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`} onClick={() => setTipoEntrega('REPARTO')}>REPARTO</button>
+               <button disabled={!cajaAbierta} className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${tipoEntrega === 'LOCAL' ? 'bg-white shadow-sm text-red-600' : 'text-gray-400'}`} onClick={() => { setTipoEntrega('LOCAL'); setCostoDespacho(''); setDireccion(''); setTelefono(''); setNotaPersonal(''); }}>LOCAL</button>
+               <button disabled={!cajaAbierta} className={`flex-1 py-2 rounded-lg text-[10px] font-black transition-all disabled:opacity-50 disabled:cursor-not-allowed ${tipoEntrega === 'REPARTO' ? 'bg-white shadow-sm text-orange-600' : 'text-gray-400'}`} onClick={() => setTipoEntrega('REPARTO')}>REPARTO</button>
              </div>
              <div className="w-24 relative group">
-                <input type="time" className="w-full h-full p-1 text-center rounded-xl border-2 border-gray-100 bg-white font-black text-xs outline-none focus:border-red-200" value={horaEntrega} onChange={(e) => setHoraEntrega(e.target.value)} />
+                <input type="time" disabled={!cajaAbierta} className="w-full h-full p-1 text-center rounded-xl border-2 border-gray-100 bg-white font-black text-xs outline-none focus:border-red-200 disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed" value={horaEntrega} onChange={(e) => setHoraEntrega(e.target.value)} />
                 <span className="absolute -top-2 left-2 bg-white px-1 text-[8px] font-black text-gray-400 uppercase">Hora</span>
              </div>
            </div>
            
            {tipoEntrega === 'REPARTO' && (
              <div className="space-y-2 p-2.5 rounded-2xl border-2 border-orange-100 bg-orange-50/50 shadow-inner animate-in fade-in zoom-in-95 duration-200">
-               <input type="text" placeholder="Dirección de entrega..." className={inputStyle + " border-orange-200"} value={direccion} onChange={e => setDireccion(e.target.value)} />
+               <input type="text" placeholder="Dirección de entrega..." className={inputStyle + " border-orange-200"} value={direccion} onChange={e => setDireccion(e.target.value)} disabled={!cajaAbierta} />
                <div className="flex gap-2">
-                 <input type="text" placeholder="Tel" className={inputStyle + " flex-1 border-orange-200"} value={telefono} onChange={e => setTelefono(e.target.value)} />
-                 <input type="number" placeholder="Envío" className={inputStyle + " border-orange-200 w-24 text-right"} value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} />
+                 <input type="text" placeholder="Tel" className={inputStyle + " flex-1 border-orange-200"} value={telefono} onChange={e => setTelefono(e.target.value)} disabled={!cajaAbierta} />
+                 <input type="number" placeholder="Envío" className={inputStyle + " border-orange-200 w-24 text-right"} value={costoDespacho} onChange={e => setCostoDespacho(e.target.value)} disabled={!cajaAbierta} />
                </div>
              </div>
            )}
@@ -549,7 +615,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               <span className="text-2xl font-black tracking-tighter leading-none">${totalFinal.toLocaleString('es-CL')}</span>
            </div>
 
-           <textarea placeholder="OBSERVACIONES PARA COCINA..." className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner" value={descripcionGeneral} onChange={e => setDescripcionGeneral(e.target.value)} />
+           <textarea placeholder="OBSERVACIONES PARA COCINA..." className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner disabled:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" value={descripcionGeneral} onChange={e => setDescripcionGeneral(e.target.value)} disabled={!cajaAbierta} />
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50 custom-scrollbar">
@@ -560,11 +626,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                     <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded-lg h-fit text-[10px]">{item.cantidad}x</span>
                 </div>
                 <div className="mt-2 flex gap-2 items-center">
-                    <input type="text" placeholder="Nota item..." className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner" value={item.observacion || ''} onChange={(e) => handleNotaItemChange(idx, e.target.value)} />
+                    <input type="text" placeholder="Nota item..." className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner disabled:opacity-50 disabled:bg-gray-100 disabled:cursor-not-allowed" value={item.observacion || ''} onChange={(e) => handleNotaItemChange(idx, e.target.value)} disabled={!cajaAbierta} />
                     <div className="flex items-center bg-slate-100 rounded-lg p-0.5 flex-shrink-0">
-                        <button onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black">-</button>
+                        <button disabled={!cajaAbierta} onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black disabled:opacity-30 disabled:cursor-not-allowed">-</button>
                         <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded shadow-sm">{item.cantidad}</span>
-                        <button onClick={() => ajustarCantidad(item.id, 1)} className="px-2 text-gray-500 font-black">+</button>
+                        <button disabled={!cajaAbierta} onClick={() => ajustarCantidad(item.id, 1)} className="px-2 text-gray-500 font-black disabled:opacity-30 disabled:cursor-not-allowed">+</button>
                     </div>
                 </div>
             </div>
@@ -654,9 +720,29 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                     </div>
                 )}
 
-                <div className="flex gap-3 mt-4">
-                    <button onClick={() => setMostrarModalPago(false)} className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-50 rounded-2xl">Cancelar</button>
-                    <button onClick={handleConfirmarCobro} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-green-700 active:scale-95 transition-all">Confirmar Cobro</button>
+                <div className="flex flex-col gap-3 mt-4">
+                    <div className="flex gap-3">
+                        <button onClick={() => setMostrarModalPago(false)} className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-50 rounded-2xl">Cancelar</button>
+                        <button onClick={handleConfirmarCobro} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-green-700 active:scale-95 transition-all">Confirmar Cobro</button>
+                    </div>
+
+                    {/* BOTÓN QUITAR COBRO */}
+                    {isPagado && (
+                        <button 
+                            onClick={() => {
+                                if (window.confirm("¿Estás seguro de querer anular el pago de este pedido?")) {
+                                    setPagoTemporal(null);
+                                    setPagoRemovido(true);
+                                    setMostrarModalPago(false);
+                                    notificar("PAGO ANULADO. ACTUALICE EL PEDIDO PARA GUARDAR CAMBIOS.", "success");
+                                }
+                            }}
+                            className="w-full py-3 bg-red-50 text-red-600 rounded-2xl text-[9px] font-black uppercase border border-red-100 hover:bg-red-600 hover:text-white transition-all shadow-sm"
+                        >
+                            <i className="bi bi-x-circle-fill mr-2"></i>
+                            Quitar Pago (Volver a Pendiente)
+                        </button>
+                    )}
                 </div>
             </div>
         </div>
@@ -682,6 +768,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                   estadoPago={pagoTemporal ? 'Pagado' : (ordenAEditar?.estado_pago || 'Pendiente')}
                   metodoPago={pagoTemporal ? pagoTemporal.metodo_pago : (ordenAEditar?.metodo_pago || '')}
                   detallesPago={pagoTemporal ? pagoTemporal.detalles_pago : (ordenAEditar?.detalles_pago || [])}
+                  descuento={pagoTemporal ? pagoTemporal.descuento : (ordenAEditar?.descuento || 0)}
                 />
                 <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl shadow-xl no-print hover:bg-black transition-colors">Cerrar Vista</button>
             </div>
@@ -708,6 +795,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               estadoPago={ultimoPedidoParaImprimir.estado_pago}
               metodoPago={ultimoPedidoParaImprimir.metodo_pago}
               detallesPago={ultimoPedidoParaImprimir.detalles_pago}
+              descuento={ultimoPedidoParaImprimir.descuento || 0}
             />
         </div>
       )}

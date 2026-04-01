@@ -329,6 +329,15 @@ export default function Caja({ user: initialUser }) {
                 const tipo = v.tipo_entrega || v.tipo || 'LOCAL';
                 const envioMonto = Number(v.costo_despacho !== undefined ? v.costo_despacho : (v.envio || 0));
 
+                // Lógica inteligente para desglose de pagos mixtos
+                let textoPago = String(v.metodo_pago || v.pago || 'N/A').toUpperCase();
+                if (v.detalles_pago && v.detalles_pago.length > 1) {
+                    const detallesStr = v.detalles_pago.map(d => `${d.metodo} ${formatoPeso(d.monto)}`).join(' Y ');
+                    textoPago = `MIXTO: ${detallesStr}`;
+                } else if (v.detalles_pago && v.detalles_pago.length === 1) {
+                    textoPago = v.detalles_pago[0].metodo.toUpperCase();
+                }
+
                 return [
                     v.numero_pedido || v.numero || '-',
                     (v.nombre_cliente || v.cliente || 'CLIENTE').toUpperCase(),
@@ -336,15 +345,16 @@ export default function Caja({ user: initialUser }) {
                     tipo.toUpperCase(),
                     formatoPeso(envioMonto),
                     formatoPeso(v.total_pagado || v.total || 0),
-                    v.metodo_pago || v.pago || 'N/A'
+                    textoPago.toUpperCase()
                 ];
             }),
             theme: 'grid',
             headStyles: { fillColor: [44, 62, 80] },
             styles: { fontSize: 6, valign: 'middle', overflow: 'linebreak' },
             columnStyles: { 
-                2: { cellWidth: 55 },
-                4: { cellWidth: 20 }
+                2: { cellWidth: 45 },
+                4: { cellWidth: 15 },
+                6: { cellWidth: 40 } // Damos más espacio para que el texto mixto quepa bien
             }
         });
 
@@ -397,7 +407,8 @@ export default function Caja({ user: initialUser }) {
                 tipo: v.tipo_entrega || 'LOCAL',
                 envio: v.costo_despacho || 0,
                 total: v.total_pagado || v.total || 0,
-                pago: v.metodo_pago || 'N/A'
+                pago: v.metodo_pago || 'N/A',
+                detalles_pago: v.detalles_pago || []
             }));
 
             await updateDoc(doc(db, COL_CAJAS, idCajaAbierta), { 
@@ -475,7 +486,19 @@ export default function Caja({ user: initialUser }) {
                                                 <div key={v.id} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
                                                     <div className="max-w-[70%]">
                                                         <div className="text-[10px] font-black uppercase truncate">#{v.numero_pedido} {v.nombre_cliente}</div>
-                                                        <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase">{v.metodo_pago}</span></div>
+                                                        <div className="flex gap-1.5 mt-0.5 flex-wrap">
+                                                            {v.detalles_pago && v.detalles_pago.length > 1 ? (
+                                                                v.detalles_pago.map((d, i) => (
+                                                                    <span key={i} className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase border border-emerald-100">
+                                                                        {d.metodo}: {formatoPeso(d.monto)}
+                                                                    </span>
+                                                                ))
+                                                            ) : (
+                                                                <span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase border border-emerald-100">
+                                                                    {v.detalles_pago?.[0]?.metodo || v.metodo_pago || 'N/A'}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                     <div className="text-right text-[11px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
                                                 </div>

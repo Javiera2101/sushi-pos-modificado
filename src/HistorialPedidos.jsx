@@ -480,7 +480,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                           </span>
                       </div>
                       <p className="text-[10px] text-slate-500 font-bold uppercase m-0 mt-1">
-                        {pedido.tipo_entrega} • {pedido.hora_pedido} • {pedido.fechaString?.split('-').reverse().join('/')}
+                        {pedido.tipo_entrega} • Pedido: {pedido.hora_pedido} {pedido.hora_entrega && `• Entrega: ${pedido.hora_entrega}`} • {pedido.fechaString?.split('-').reverse().join('/')}
                       </p>
                       
                       <div className="mt-3 space-y-1 bg-slate-50 p-3 rounded-2xl border border-slate-100 max-w-md">
@@ -505,10 +505,20 @@ export default function HistorialPedidos({ onEditar, user }) {
                         </div>
                       )}
 
-                      {pedido.tipo_entrega === 'REPARTO' && pedido.nota_personal && (
+                      {pedido.tipo_entrega === 'REPARTO' && (
                           <div className="mt-2 p-2.5 bg-blue-50 border border-blue-100 rounded-xl max-w-md">
-                            <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-0.5">Nota de Reparto:</span>
-                            <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.nota_personal}</p>
+                            <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-1">Datos de Reparto:</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[10px] text-slate-700 uppercase font-bold">
+                                {pedido.direccion && <div><span className="text-blue-500">Dir:</span> {pedido.direccion}</div>}
+                                {pedido.telefono && <div><span className="text-blue-500">Tel:</span> {pedido.telefono}</div>}
+                                {Number(pedido.costo_despacho) > 0 && <div><span className="text-blue-500">Envío:</span> {formatPeso(pedido.costo_despacho)}</div>}
+                            </div>
+                            {pedido.nota_personal && (
+                                <div className="mt-1 pt-1 border-t border-blue-100/50">
+                                    <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-0.5">Nota:</span>
+                                    <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.nota_personal}</p>
+                                </div>
+                            )}
                           </div>
                       )}
                     </div>
