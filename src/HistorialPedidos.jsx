@@ -8,8 +8,6 @@ import {
   onSnapshot, 
   doc, 
   updateDoc, 
-  addDoc, 
-  Timestamp,
   deleteDoc,
   getDocs,
   enableIndexedDbPersistence
@@ -20,6 +18,7 @@ import {
   onAuthStateChanged,
   signInWithCustomToken
 } from 'firebase/auth';
+import { Timestamp } from 'firebase/firestore';
 
 // --- CONFIGURACIÓN E INICIALIZACIÓN SEGURA DE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
@@ -136,7 +135,7 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
                             <span>${(Number(total) || 0).toLocaleString('es-CL')}</span>
                         </div>
                         <div className="flex justify-between font-black text-[11px] text-red-600 uppercase border border-red-200 bg-red-50 px-1 py-0.5 rounded">
-                            <span>DCTO 10%:</span>
+                            <span>DCTO 10% (PROD):</span>
                             <span>-${Number(descuento).toLocaleString('es-CL')}</span>
                         </div>
                         <div className="flex justify-between font-black text-sm mt-1 border-t border-dashed pt-1">
@@ -286,8 +285,11 @@ export default function HistorialPedidos({ onEditar, user }) {
   const toggleMetodoMixto = (metodo) => {
     const nuevoEstado = !metodosHabilitados[metodo];
     setMetodosHabilitados(prev => ({ ...prev, [metodo]: nuevoEstado }));
+    
+    // Cálculo seguro del descuento solo sobre productos en el historial
     const totalOriginal = pedidoParaCobrar?.total || 0;
-    const desc = aplicarDescuento ? Math.round(totalOriginal * 0.1) : 0;
+    const subtotalProductos = pedidoParaCobrar?.items?.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) || 0;
+    const desc = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
     const totalObjetivo = totalOriginal - desc;
 
     if (nuevoEstado) {
@@ -304,7 +306,10 @@ export default function HistorialPedidos({ onEditar, user }) {
   const confirmarPago = async () => {
     if (!pedidoParaCobrar) return;
     const p = pedidoParaCobrar;
-    const montoDescuento = aplicarDescuento ? Math.round(p.total * 0.1) : 0;
+    
+    // Cálculo de descuento basado únicamente en los productos
+    const subtotalProductos = p.items?.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) || 0;
+    const montoDescuento = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
     const totalACobrar = p.total - montoDescuento;
 
     const metodosFinales = modoPago === 'unico' 
@@ -411,6 +416,10 @@ export default function HistorialPedidos({ onEditar, user }) {
     }
   };
 
+  // Variable de apoyo para la UI del cobro en el modal
+  const subtotalProductosModal = pedidoParaCobrar?.items?.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) || 0;
+  const descuentoUI = aplicarDescuento ? Math.round(subtotalProductosModal * 0.1) : 0;
+
   return (
     <div className="p-6 h-full overflow-y-auto bg-slate-100 font-sans text-gray-800 relative">
       
@@ -480,7 +489,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                           </span>
                       </div>
                       <p className="text-[10px] text-slate-500 font-bold uppercase m-0 mt-1">
-                        {pedido.tipo_entrega} • {pedido.hora_pedido} • {pedido.fechaString?.split('-').reverse().join('/')}
+                        {pedido.tipo_entrega} • Pedido: {pedido.hora_pedido} {pedido.hora_entrega && `• Entrega: ${pedido.hora_entrega}`} • {pedido.fechaString?.split('-').reverse().join('/')}
                       </p>
                       
                       <div className="mt-3 space-y-1 bg-slate-50 p-3 rounded-2xl border border-slate-100 max-w-md">
@@ -505,21 +514,50 @@ export default function HistorialPedidos({ onEditar, user }) {
                         </div>
                       )}
 
-                      {pedido.tipo_entrega === 'REPARTO' && pedido.nota_personal && (
+                      {pedido.tipo_entrega === 'REPARTO' && (
                           <div className="mt-2 p-2.5 bg-blue-50 border border-blue-100 rounded-xl max-w-md">
-                            <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-0.5">Nota de Reparto:</span>
-                            <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.nota_personal}</p>
+                            <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-1">Datos de Reparto:</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[10px] text-slate-700 uppercase font-bold">
+                                {pedido.direccion && <div><span className="text-blue-500">Dir:</span> {pedido.direccion}</div>}
+                                {pedido.telefono && <div><span className="text-blue-500">Tel:</span> {pedido.telefono}</div>}
+                                {Number(pedido.costo_despacho) > 0 && <div><span className="text-blue-500">Envío:</span> {formatPeso(pedido.costo_despacho)}</div>}
+                            </div>
+                            {pedido.nota_personal && (
+                                <div className="mt-1 pt-1 border-t border-blue-100/50">
+                                    <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-0.5">Nota:</span>
+                                    <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.nota_personal}</p>
+                                </div>
+                            )}
                           </div>
                       )}
                     </div>
                   </div>
                   
                   <div className="flex flex-row md:flex-col items-center md:items-end gap-4 mt-4 md:mt-0 ml-0 md:ml-6 w-full md:w-auto">
-                    <div className="text-left md:text-right flex-1 md:flex-initial">
-                      <div className="text-2xl font-black text-slate-900">{formatPeso(pedido.total_pagado || pedido.total)}</div>
-                      <div className={`text-[9px] font-black uppercase tracking-widest ${isPaid ? 'text-emerald-600' : 'text-rose-500'}`}>
+                    <div className="flex flex-col items-start md:items-end flex-1 md:flex-initial">
+                      <div className="flex flex-col w-full md:w-36 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 border-b border-slate-100 pb-1">
+                        <div className="flex justify-between gap-2">
+                          <span>Prod:</span>
+                          <span className="text-slate-600">{formatPeso((Number(pedido.total) || 0) - (Number(pedido.costo_despacho) || 0))}</span>
+                        </div>
+                        {Number(pedido.costo_despacho) > 0 && (
+                          <div className="flex justify-between gap-2">
+                            <span>Envío:</span>
+                            <span className="text-slate-600">+{formatPeso(pedido.costo_despacho)}</span>
+                          </div>
+                        )}
+                        {Number(pedido.descuento) > 0 && (
+                          <div className="flex justify-between gap-2 text-blue-500">
+                            <span>Dcto:</span>
+                            <span>-{formatPeso(pedido.descuento)}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-2xl font-black text-slate-900 leading-none mt-1">
+                        {formatPeso((Number(pedido.total) || 0) - (Number(pedido.descuento) || 0))}
+                      </div>
+                      <div className={`text-[9px] font-black uppercase tracking-widest mt-1 ${isPaid ? 'text-emerald-600' : 'text-rose-500'}`}>
                         {isPaid ? `PAGADO (${pedido.metodo_pago})` : 'PAGO PENDIENTE'}
-                        {pedido.descuento > 0 && <span className="ml-2 text-blue-500">-{formatPeso(pedido.descuento)}</span>}
                       </div>
                     </div>
                     
@@ -608,7 +646,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                 <div className="bg-slate-50 p-6 rounded-[2rem] border-2 border-slate-100 text-center relative overflow-hidden">
                     <div className="flex flex-col items-center">
                         <span className="text-4xl font-black text-slate-900 tracking-tighter">
-                            {formatPeso(pedidoParaCobrar.total - (aplicarDescuento ? Math.round(pedidoParaCobrar.total * 0.1) : 0))}
+                            {formatPeso(pedidoParaCobrar.total - descuentoUI)}
                         </span>
                         {aplicarDescuento && (
                             <span className="text-[10px] font-black text-red-500 uppercase mt-1 line-through opacity-50">
@@ -681,6 +719,7 @@ export default function HistorialPedidos({ onEditar, user }) {
         </div>
       )}
 
+      {/* ELEMENTO DE IMPRESIÓN WEB */}
       {pedidoActivoParaImprimir && (
         <div className="hidden print:block fixed inset-0 bg-white z-[10000]">
             <Ticket 

@@ -262,20 +262,37 @@ export default function Caja({ user: initialUser }) {
         let rawGastos = [];
 
         try {
+            // 1. Obtenemos las órdenes directamente de la base de datos (con detalles_pago íntegros)
             const qOrders = query(collection(db, COL_ORDENES), where("fechaString", "==", targetFecha));
             const snapOrders = await getDocs(qOrders);
-            rawMovs = snapOrders.docs
+            const fetchedOrders = snapOrders.docs
                 .map(d => ({ id: d.id, ...d.data() }))
-                .filter(o => String(o.estado_pago).toLowerCase() === 'pagado')
-                .sort((a, b) => (a.numero_pedido || 0) - (b.numero_pedido || 0));
+                .filter(o => String(o.estado_pago).toLowerCase() === 'pagado');
+
+            // 2. Si es una caja antigua, usamos su fotografía, PERO la enriquecemos con los detalles de la BD
+            if (cajaData && cajaData.movimientos_cierre && cajaData.movimientos_cierre.length > 0) {
+                rawMovs = cajaData.movimientos_cierre.map(movCierre => {
+                    const numCierre = String(movCierre.numero || movCierre.numero_pedido);
+                    // Buscamos el pedido original correspondiente
+                    const ordenFresca = fetchedOrders.find(o => String(o.numero_pedido) === numCierre);
+                    
+                    // Si el pedido original tiene el arreglo detalles_pago, lo inyectamos al reporte
+                    if (ordenFresca && ordenFresca.detalles_pago) {
+                        return { ...movCierre, detalles_pago: ordenFresca.detalles_pago };
+                    }
+                    return movCierre;
+                });
+            } else {
+                // Si es el turno actual, usamos directamente las órdenes descargadas
+                rawMovs = fetchedOrders;
+            }
+
+            rawMovs.sort((a, b) => (a.numero_pedido || a.numero || 0) - (b.numero_pedido || b.numero || 0));
 
             const qExpenses = query(collection(db, COL_GASTOS), where("fechaString", "==", targetFecha));
             const snapExpenses = await getDocs(qExpenses);
             rawGastos = snapExpenses.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            if (rawMovs.length === 0 && cajaData && cajaData.movimientos_cierre) {
-                rawMovs = cajaData.movimientos_cierre;
-            }
         } catch (err) {
             console.error(err);
             rawMovs = listaVentas;
@@ -322,12 +339,30 @@ export default function Caja({ user: initialUser }) {
         pdf.setFontSize(12);
         pdf.setFont("helvetica", "bold");
         pdf.text("DETALLE DE MOVIMIENTOS", 15, pdf.lastAutoTable.finalY + 15);
+        
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 20,
             head: [['N°', 'Cliente', 'Detalle', 'Tipo', 'Envío', 'Total', 'Pago']],
             body: rawMovs.map(v => {
                 const tipo = v.tipo_entrega || v.tipo || 'LOCAL';
                 const envioMonto = Number(v.costo_despacho !== undefined ? v.costo_despacho : (v.envio || 0));
+
+                let textoPago = String(v.metodo_pago || v.pago || 'N/A').toUpperCase();
+                
+                // Salvaguarda: Asegurarse de que detalles_pago se procese bien sea Array u Objecto de Firebase
+                let detalles = [];
+                if (Array.isArray(v.detalles_pago)) {
+                    detalles = v.detalles_pago;
+                } else if (v.detalles_pago && typeof v.detalles_pago === 'object') {
+                    detalles = Object.values(v.detalles_pago);
+                }
+
+                if (detalles.length > 1) {
+                    const detallesStr = detalles.map(d => `${d.metodo} ${formatoPeso(d.monto)}`).join(' Y ');
+                    textoPago = `MIXTO: ${detallesStr}`.toUpperCase();
+                } else if (detalles.length === 1) {
+                    textoPago = String(detalles[0].metodo).toUpperCase();
+                }
 
                 return [
                     v.numero_pedido || v.numero || '-',
@@ -336,15 +371,16 @@ export default function Caja({ user: initialUser }) {
                     tipo.toUpperCase(),
                     formatoPeso(envioMonto),
                     formatoPeso(v.total_pagado || v.total || 0),
-                    v.metodo_pago || v.pago || 'N/A'
+                    textoPago
                 ];
             }),
             theme: 'grid',
             headStyles: { fillColor: [44, 62, 80] },
             styles: { fontSize: 6, valign: 'middle', overflow: 'linebreak' },
             columnStyles: { 
-                2: { cellWidth: 55 },
-                4: { cellWidth: 20 }
+                2: { cellWidth: 45 },
+                4: { cellWidth: 15 },
+                6: { cellWidth: 40 }
             }
         });
 
@@ -397,7 +433,8 @@ export default function Caja({ user: initialUser }) {
                 tipo: v.tipo_entrega || 'LOCAL',
                 envio: v.costo_despacho || 0,
                 total: v.total_pagado || v.total || 0,
-                pago: v.metodo_pago || 'N/A'
+                pago: v.metodo_pago || 'N/A',
+                detalles_pago: v.detalles_pago || []
             }));
 
             await updateDoc(doc(db, COL_CAJAS, idCajaAbierta), { 
@@ -475,7 +512,19 @@ export default function Caja({ user: initialUser }) {
                                                 <div key={v.id} className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
                                                     <div className="max-w-[70%]">
                                                         <div className="text-[10px] font-black uppercase truncate">#{v.numero_pedido} {v.nombre_cliente}</div>
-                                                        <div className="flex gap-1.5 mt-0.5"><span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase">{v.metodo_pago}</span></div>
+                                                        <div className="flex gap-1.5 mt-0.5 flex-wrap">
+                                                            {v.detalles_pago && v.detalles_pago.length > 1 ? (
+                                                                v.detalles_pago.map((d, i) => (
+                                                                    <span key={i} className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase border border-emerald-100">
+                                                                        {d.metodo}: {formatoPeso(d.monto)}
+                                                                    </span>
+                                                                ))
+                                                            ) : (
+                                                                <span className="text-[7px] text-emerald-600 font-bold bg-emerald-50 px-1 rounded uppercase border border-emerald-100">
+                                                                    {v.detalles_pago?.[0]?.metodo || v.metodo_pago || 'N/A'}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                     <div className="text-right text-[11px] font-black text-slate-900">{formatoPeso(v.total_pagado || v.total)}</div>
                                                 </div>
