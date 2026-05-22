@@ -62,6 +62,17 @@ const obtenerFechaReal = (timestamp, fechaStringFallback) => {
     return fechaStringFallback || getFechaChile();
 };
 
+// --- DETECCIÓN DE ELECTRON (Para envío de impresión física) ---
+const ipcRenderer = (function() {
+  try {
+    if (typeof window !== 'undefined' && window.require) {
+      const electron = window.require('electron');
+      return electron ? electron.ipcRenderer : null;
+    }
+  } catch (e) { return null; }
+  return null;
+})();
+
 export default function Caja({ user: initialUser }) {
     const [notificacion, setNotificacion] = useState(null);
     const notificar = (msg, tipo = 'success') => {
@@ -84,8 +95,8 @@ export default function Caja({ user: initialUser }) {
     const [totalBrutoRecaudado, setTotalBrutoRecaudado] = useState(0); 
     const [totalVentasNetas, setTotalVentasNetas] = useState(0);     
     const [totalEnvios, setTotalEnvios] = useState(0);       
-    const [totalGastos, setTotalGastos] = useState(0); // Gastos SOLO de Caja (para cuadratura de efectivo)
-    const [totalGastosGlobales, setTotalGastosGlobales] = useState(0); // NUEVO: Gastos Totales (para utilidad)
+    const [totalGastos, setTotalGastos] = useState(0); 
+    const [totalGastosGlobales, setTotalGastosGlobales] = useState(0); 
     const [gananciaReal, setGananciaReal] = useState(0);
     const [efectivoEnCajon, setEfectivoEnCajon] = useState(0);
 
@@ -213,12 +224,10 @@ export default function Caja({ user: initialUser }) {
                 const turno = snap.docs.map(d => ({ ...d.data(), id: d.id }));
                 setListaGastos(turno);
                 
-                // 1. Gastos de Caja (afectan al efectivo físico)
                 const gastosCaja = turno
                     .filter(g => !g.origen || g.origen === 'Caja') 
                     .reduce((sum, i) => sum + (Number(i.monto)||0), 0);
                 
-                // 2. Gastos Totales (Caja + Externos, afectan a la Utilidad)
                 const gastosTodos = turno
                     .reduce((sum, i) => sum + (Number(i.monto)||0), 0);
                 
@@ -233,13 +242,47 @@ export default function Caja({ user: initialUser }) {
     useEffect(() => {
         const netas = totalBrutoRecaudado - totalEnvios;
         setTotalVentasNetas(netas);
-        
-        // CORRECCIÓN: Utilidad = Ventas Netas - GASTOS TOTALES (Externos + Caja)
         setGananciaReal(netas - totalGastosGlobales);
-        
-        // Efectivo en Cajón = (Apertura + Ventas Efectivo) - GASTOS SOLO DE CAJA
         setEfectivoEnCajon((montoApertura + efectivoRecaudadoTotal) - totalGastos);
     }, [totalBrutoRecaudado, totalEnvios, totalGastos, totalGastosGlobales, montoApertura, efectivoRecaudadoTotal]);
+
+    // --- FUNCIÓN DE IMPRESIÓN RAW EN IMPRESORA FÍSICA (80MM) ---
+    const handleImprimirCierre = (cajaData = null) => {
+        const targetFecha = cajaData ? cajaData.fechaString : fechaInicioCaja;
+        const data = cajaData || { 
+            fechaString: targetFecha, 
+            total_ventas_netas: totalVentasNetas,
+            total_envios: totalEnvios, 
+            total_gastos: totalGastos, 
+            total_ganancia: gananciaReal, 
+            monto_cierre_sistema: efectivoEnCajon, 
+            monto_apertura: montoApertura, 
+            total_efectivo: efectivoRecaudadoTotal,
+            total_transferencia: transferencia, 
+            total_debito: debito,
+            usuario_email: user?.email || 'N/A'
+        };
+
+        if (ipcRenderer) {
+            ipcRenderer.send('imprimir-ticket-raw', {
+                tipo: 'CIERRE_CAJA',
+                fecha: data.fechaString,
+                montoApertura: data.monto_apertura,
+                totalVentasNetas: data.total_ventas_netas,
+                totalEnvios: data.total_envios,
+                totalGastos: data.total_gastos,
+                totalGanancia: data.total_ganancia,
+                montoCierreSistema: data.monto_cierre_sistema,
+                totalEfectivo: data.total_efectivo,
+                totalTransferencia: data.total_transferencia,
+                totalDebito: data.total_debito,
+                usuario: data.usuario_email
+            });
+            notificar("Enviando reporte a impresora...", "success");
+        } else {
+            notificar("Impresora física no disponible (Solo ejecutable en app Electron). Use PDF.", "error");
+        }
+    };
 
     const handleExportarPDF = async (cajaData = null) => {
         if (!libsReady) {
@@ -262,28 +305,27 @@ export default function Caja({ user: initialUser }) {
         let rawGastos = [];
 
         try {
-            // 1. Obtenemos las órdenes directamente de la base de datos (con detalles_pago íntegros)
             const qOrders = query(collection(db, COL_ORDENES), where("fechaString", "==", targetFecha));
             const snapOrders = await getDocs(qOrders);
             const fetchedOrders = snapOrders.docs
                 .map(d => ({ id: d.id, ...d.data() }))
                 .filter(o => String(o.estado_pago).toLowerCase() === 'pagado');
 
-            // 2. Si es una caja antigua, usamos su fotografía, PERO la enriquecemos con los detalles de la BD
             if (cajaData && cajaData.movimientos_cierre && cajaData.movimientos_cierre.length > 0) {
                 rawMovs = cajaData.movimientos_cierre.map(movCierre => {
                     const numCierre = String(movCierre.numero || movCierre.numero_pedido);
-                    // Buscamos el pedido original correspondiente
                     const ordenFresca = fetchedOrders.find(o => String(o.numero_pedido) === numCierre);
                     
-                    // Si el pedido original tiene el arreglo detalles_pago, lo inyectamos al reporte
-                    if (ordenFresca && ordenFresca.detalles_pago) {
-                        return { ...movCierre, detalles_pago: ordenFresca.detalles_pago };
+                    if (ordenFresca) {
+                        return { 
+                            ...movCierre, 
+                            detalles_pago: ordenFresca.detalles_pago || movCierre.detalles_pago,
+                            hora_pedido: ordenFresca.hora_pedido || movCierre.hora_pedido 
+                        };
                     }
                     return movCierre;
                 });
             } else {
-                // Si es el turno actual, usamos directamente las órdenes descargadas
                 rawMovs = fetchedOrders;
             }
 
@@ -342,14 +384,13 @@ export default function Caja({ user: initialUser }) {
         
         pdf.autoTable({
             startY: pdf.lastAutoTable.finalY + 20,
-            head: [['N°', 'Cliente', 'Detalle', 'Tipo', 'Envío', 'Total', 'Pago']],
+            head: [['N°', 'Hora', 'Cliente', 'Detalle', 'Tipo', 'Envío', 'Total', 'Pago']],
             body: rawMovs.map(v => {
                 const tipo = v.tipo_entrega || v.tipo || 'LOCAL';
                 const envioMonto = Number(v.costo_despacho !== undefined ? v.costo_despacho : (v.envio || 0));
 
                 let textoPago = String(v.metodo_pago || v.pago || 'N/A').toUpperCase();
                 
-                // Salvaguarda: Asegurarse de que detalles_pago se procese bien sea Array u Objecto de Firebase
                 let detalles = [];
                 if (Array.isArray(v.detalles_pago)) {
                     detalles = v.detalles_pago;
@@ -366,6 +407,7 @@ export default function Caja({ user: initialUser }) {
 
                 return [
                     v.numero_pedido || v.numero || '-',
+                    v.hora_pedido || '--:--', 
                     (v.nombre_cliente || v.cliente || 'CLIENTE').toUpperCase(),
                     (v.items || []).map(i => `${i.cantidad} X ${i.nombre}`).join('\n'),
                     tipo.toUpperCase(),
@@ -378,9 +420,10 @@ export default function Caja({ user: initialUser }) {
             headStyles: { fillColor: [44, 62, 80] },
             styles: { fontSize: 6, valign: 'middle', overflow: 'linebreak' },
             columnStyles: { 
-                2: { cellWidth: 45 },
-                4: { cellWidth: 15 },
-                6: { cellWidth: 40 }
+                1: { cellWidth: 12 }, 
+                3: { cellWidth: 45 },
+                5: { cellWidth: 13 },
+                7: { cellWidth: 35 }
             }
         });
 
@@ -390,10 +433,11 @@ export default function Caja({ user: initialUser }) {
             pdf.text("DETALLE DE GASTOS", 15, pdf.lastAutoTable.finalY + 15);
             pdf.autoTable({
                 startY: pdf.lastAutoTable.finalY + 20,
-                head: [['Descripción', 'Categoría', 'Origen', 'Monto']],
+                head: [['Descripción', 'Categoría', 'Trabajador', 'Origen', 'Monto']],
                 body: rawGastos.map(g => [
                     (g.descripcion || '').toUpperCase(),
                     (g.categoria || 'GENERAL').toUpperCase(),
+                    (g.trabajador || '-').toUpperCase(), 
                     (g.origen || 'CAJA').toUpperCase(),
                     formatoPeso(g.monto)
                 ]),
@@ -426,8 +470,12 @@ export default function Caja({ user: initialUser }) {
         if (!idCajaAbierta) return;
         if (!window.confirm("¿Confirma el cierre del turno actual?")) return;
         try {
+            // Imprimir el ticket de cierre justo antes de clausurar en la base de datos
+            handleImprimirCierre();
+
             const movimientosRespaldados = listaVentas.map(v => ({
                 numero: v.numero_pedido || '-',
+                hora_pedido: v.hora_pedido || '--:--', 
                 cliente: v.nombre_cliente || 'CLIENTE',
                 items: v.items || [],
                 tipo: v.tipo_entrega || 'LOCAL',
@@ -452,6 +500,7 @@ export default function Caja({ user: initialUser }) {
 
     return (
         <div className="flex flex-col h-full bg-slate-100 p-4 font-sans overflow-hidden text-gray-800 relative">
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" />
             
             {notificacion && (
                 <div className={`fixed top-4 right-4 z-[9999] px-6 py-4 rounded-2xl shadow-2xl font-black uppercase text-xs animate-bounce ${notificacion.tipo === 'success' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
@@ -482,7 +531,13 @@ export default function Caja({ user: initialUser }) {
                                 <h2 className="text-2xl font-black text-slate-900 tracking-tighter uppercase m-0 leading-none">Caja Isakari {esPrueba ? '(TEST)' : ''}</h2>
                                 <span className="text-[10px] font-bold text-slate-400 uppercase mt-1 flex items-center gap-1.5"><span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span> Turno: {fechaInicioCaja}</span>
                             </div>
-                            <div className="flex gap-2"><button onClick={() => handleExportarPDF()} className="bg-slate-50 text-slate-600 border border-slate-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-slate-100">PDF</button><button onClick={handleCerrarCaja} className="bg-slate-900 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg hover:bg-black transition-all">CERRAR TURNO</button></div>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleImprimirCierre()} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-black flex items-center gap-1.5">
+                                    <i className="bi bi-printer-fill"></i> IMPRIMIR CIERRE
+                                </button>
+                                <button onClick={() => handleExportarPDF()} className="bg-slate-50 text-slate-600 border border-slate-200 px-4 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-slate-100">PDF</button>
+                                <button onClick={handleCerrarCaja} className="bg-red-600 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase shadow-lg hover:bg-red-700 transition-all">CERRAR TURNO</button>
+                            </div>
                         </header>
                         <div className="flex-1 overflow-y-auto space-y-4 pb-10 custom-scrollbar pr-2">
                             <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
@@ -588,7 +643,11 @@ export default function Caja({ user: initialUser }) {
                                         <div className="font-black text-slate-900 text-sm">{formatoPeso(c.monto_cierre_sistema)}</div>
                                     </div>
                                     <div className="flex gap-2 ml-4">
-                                        <button onClick={() => handleExportarPDF(c)} className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center shadow-sm transition-all hover:bg-red-600 hover:text-white">
+                                        {/* BOTÓN DE IMPRESORA VINCULADO AL HISTORIAL */}
+                                        <button onClick={() => handleImprimirCierre(c)} className="w-10 h-10 bg-slate-100 text-slate-600 rounded-xl flex items-center justify-center shadow-sm transition-all hover:bg-slate-900 hover:text-white" title="Re-Imprimir Ticket de Cierre">
+                                            <i className="bi bi-printer-fill text-base"></i>
+                                        </button>
+                                        <button onClick={() => handleExportarPDF(c)} className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center shadow-sm transition-all hover:bg-red-600 hover:text-white" title="Descargar Reporte PDF">
                                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
                                                 <path d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2M9.5 3V1.1L12.9 4.5h-3.4zM4.603 12.087a.8.8 0 0 1-.438-.42c-.195-.388-.13-.776.08-1.102.166-.257.433-.446.727-.53.367-.106.767-.053 1.141.105.35.149.674.416.99.713.116.11.235.23.35.358.338.381.603.765.803 1.125.105.19.188.359.252.503.045.099.073.18.092.246.012.042.02.072.024.089l.004.013.001.004a.2.2 0 0 1-.16.25c-.012 0-.025 0-.037-.002l-.013-.004-.045-.015a1.6 1.6 0 0 1-.188-.082 3.4 3.4 0 0 1-.45-.264 4.3 4.3 0 0 1-.654-.506 8.8 8.8 0 0 1-.806-.788 12.5 12.5 0 0 1-.73-.8c-.365-.442-.69-.823-.975-1.118l-.025-.025a.5.5 0 0 1-.003-.003l-.008-.007-.001-.001a1 1 0 0 0-.256-.16c-.167-.06-.339-.09-.531-.09-.237 0-.439.045-.613.143a.6.6 0 0 0-.214.759c.15.292.445.47.723.548.357.1.726.048 1.067-.116.326-.157.6-.41.86-.69z"/>
                                             </svg>

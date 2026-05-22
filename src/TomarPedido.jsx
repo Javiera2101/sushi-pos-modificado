@@ -24,12 +24,12 @@ import {
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { 
-      apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "", 
-      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "", 
-      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "", 
-      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "", 
-      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "", 
-      appId: import.meta.env.VITE_FIREBASE_APP_ID || "" 
+      apiKey: "", 
+      authDomain: "", 
+      projectId: "", 
+      storageBucket: "", 
+      messagingSenderId: "", 
+      appId: "" 
     };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -106,18 +106,28 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
             
             <table className="w-full mb-2">
                 <tbody>
-                    {orden?.map((item, idx) => (
-                        <tr key={idx} className="align-top border-b border-gray-50 last:border-0">
-                            <td className="pr-1 font-bold">{item.cantidad}x</td>
-                            <td className="w-full uppercase">
-                                <div className="font-bold">{item.nombre}</div>
-                                {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600">↳ {item.observacion}</div>}
-                            </td>
-                            <td className="text-right whitespace-nowrap pl-1">
-                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString('es-CL')}
-                            </td>
-                        </tr>
-                    ))}
+                    {orden?.map((item, idx) => {
+                        const nombreLimpio = String(item.nombre || '').toUpperCase();
+                        const esProductoLargo = nombreLimpio.includes("MIXTO") || nombreLimpio.includes("PREMIUM");
+
+                        return (
+                            <tr key={idx} className="align-top border-b border-gray-50 last:border-0">
+                                <td className="pr-1 font-bold">{item.cantidad}x</td>
+                                <td className="w-full uppercase">
+                                    <div className="font-bold">{item.nombre}</div>
+                                    
+                                    {(!esProductoLargo && item.descripcion) && (
+                                        <div className="text-[8px] text-gray-500 leading-tight mt-0.5 whitespace-pre-wrap">{item.descripcion}</div>
+                                    )}
+                                    
+                                    {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600 whitespace-pre-wrap">↳ {item.observacion}</div>}
+                                </td>
+                                <td className="text-right whitespace-nowrap pl-1">
+                                    ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString('es-CL')}
+                                </td>
+                            </tr>
+                        );
+                    })}
                     {tipoEntrega === 'REPARTO' && Number(costoDespacho) > 0 && (
                         <tr className="border-t border-dashed">
                             <td colSpan="2" className="pt-1 uppercase">Envío:</td>
@@ -153,8 +163,8 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
 
             {(descripcion || (tipoEntrega === 'REPARTO' && notaPersonal)) && (
                 <div className="mt-3 border-t border-dashed pt-1 space-y-1">
-                    {tipoEntrega === 'REPARTO' && notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1">Nota: {notaPersonal}</div>}
-                    {descripcion && <div className="italic text-[8px] uppercase opacity-75">Obs Cocina: {descripcion}</div>}
+                    {tipoEntrega === 'REPARTO' && notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1 whitespace-pre-wrap">Nota: {notaPersonal}</div>}
+                    {descripcion && <div className="italic text-[8px] uppercase opacity-75 whitespace-pre-wrap">Obs Cocina: {descripcion}</div>}
                 </div>
             )}
             <div className={`uppercase mt-3 border p-1 text-center font-bold ${estiloPago}`}>{textoPago}</div>
@@ -189,12 +199,11 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [horaEntrega, setHoraEntrega] = useState(getCurrentTimeForInput());
   const [mostrarModalPago, setMostrarModalPago] = useState(false);
   
-  // Estados para el pago
+  // Estados para el pago y descuentos
   const [pagoTemporal, setPagoTemporal] = useState(null); 
   const [pagoRemovido, setPagoRemovido] = useState(false);
-  
   const [modoPago, setModoPago] = useState('unico'); 
-  const [metodoUnico, setMetodoUnico] = useState('Efectivo');
+  const [metodoUnico, setMetodoUnico] = useState('');
   const [aplicarDescuento, setAplicarDescuento] = useState(false);
   const [montosMixtos, setMontosMixtos] = useState({ Efectivo: '', Transferencia: '', Débito: '' });
   const [metodosHabilitados, setMetodosHabilitados] = useState({ Efectivo: true, Transferencia: false, Débito: false });
@@ -204,6 +213,8 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const [mostrarVistaPrevia, setMostrarVistaPrevia] = useState(false);
   const [ultimoPedidoParaImprimir, setUltimoPedidoParaImprimir] = useState(null); 
   
+  const [busqueda, setBusqueda] = useState(''); // ESTADO DEL BUSCADOR
+
   // Estado local para CAJA
   const [cajaAbierta, setCajaAbierta] = useState(cajaAbiertaGlobal || false);
 
@@ -231,6 +242,9 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     setHoraEntrega(getCurrentTimeForInput());
     setPagoTemporal(null);
     setPagoRemovido(false);
+    setAplicarDescuento(false);
+    setMetodoUnico('');
+    setBusqueda(''); // Limpiar buscador al guardar o cancelar
   };
 
   // 1. Escuchar Caja Localmente
@@ -293,18 +307,17 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
       setHoraEntrega(ordenAEditar.hora_entrega || getCurrentTimeForInput());
       setPagoTemporal(null); 
       setPagoRemovido(false);
+      setAplicarDescuento((ordenAEditar.descuento || 0) > 0); 
     } else {
       limpiarFormulario();
     }
   }, [ordenAEditar]);
 
 
-  // --- NUEVA LÓGICA DE CÁLCULO SEPARADO ---
+  // --- CÁLCULO SEPARADO ---
   const subtotalProductos = orden.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0);
   const costoEnvioVal = tipoEntrega === 'REPARTO' ? (parseInt(costoDespacho) || 0) : 0;
   const totalFinal = subtotalProductos + costoEnvioVal;
-  
-  // EL DESCUENTO AHORA SOLO SE CALCULA SOBRE LOS PRODUCTOS
   const montoDescuento = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
   
 
@@ -341,7 +354,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     const nuevoEstado = !metodosHabilitados[metodo];
     setMetodosHabilitados(prev => ({ ...prev, [metodo]: nuevoEstado }));
     
-    // Lo que el cliente realmente debe pagar
     const totalObjetivo = totalFinal - montoDescuento;
     
     if (nuevoEstado) {
@@ -360,12 +372,27 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     let metodoGeneral = '';
 
     if (modoPago === 'unico') {
+        if (!metodoUnico) {
+            setPagoTemporal(null);
+            setPagoRemovido(false);
+            setMostrarModalPago(false); 
+            notificar("OPCIONES GUARDADAS. EL PEDIDO SIGUE PENDIENTE DE PAGO.", "success");
+            return;
+        }
         metodosFinales = [{ metodo: metodoUnico, monto: totalACobrar }];
         metodoGeneral = metodoUnico;
     } else {
         metodosFinales = Object.entries(montosMixtos)
           .filter(([m]) => metodosHabilitados[m] && getRawNumber(montosMixtos[m]) > 0)
           .map(([m, v]) => ({ metodo: m, monto: getRawNumber(v) }));
+          
+        if (metodosFinales.length === 0) {
+            setPagoTemporal(null);
+            setPagoRemovido(false);
+            setMostrarModalPago(false); 
+            notificar("OPCIONES GUARDADAS. EL PEDIDO SIGUE PENDIENTE DE PAGO.", "success");
+            return;
+        }
         metodoGeneral = 'Mixto';
     }
 
@@ -377,7 +404,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     }
 
     const datosPago = {
-        estado_pago: 'Pagado',
+        state_pago: 'Pagado',
         metodo_pago: metodoGeneral,
         detalles_pago: metodosFinales,
         descuento: montoDescuento,
@@ -419,14 +446,22 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     let detallesPago = sourcePago?.detalles_pago || [];
     let totalPagado = sourcePago?.total_pagado || 0;
     let fechaPago = sourcePago?.fecha_pago || null;
-    let descuentoGuardado = sourcePago?.descuento || 0;
+    
+    let descuentoGuardado = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
 
     if (!sourcePago && !ordenAEditar) {
-        detallesPago = []; totalPagado = 0; fechaPago = null; descuentoGuardado = 0;
+        detallesPago = []; totalPagado = 0; fechaPago = null;
+    } else if (!sourcePago && ordenAEditar) {
+        detallesPago = []; totalPagado = 0; fechaPago = null;
     }
 
+    const itemsClonados = JSON.parse(JSON.stringify(orden)).map(item => ({
+        ...item,
+        observacion: item.observacion ? String(item.observacion).toUpperCase() : ''
+    }));
+
     const datos = {
-        items: JSON.parse(JSON.stringify(orden)), 
+        items: itemsClonados, 
         total: totalFinal,
         costo_despacho: costoEnvioVal, 
         tipo_entrega: tipoEntrega, 
@@ -468,7 +503,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             notificar(`PEDIDO #${datos.numero_pedido} GUARDADO EXITOSAMENTE`, "success"); 
         }
 
-        // Si se pagó, registrar el ingreso
         if (pagoTemporal && detallesPago && detallesPago.length > 0) {
             const movRef = collection(db, COL_MOVIMIENTOS);
             for (const detalle of detallesPago) {
@@ -485,7 +519,6 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
             }
         }
 
-        // Si se anuló un pago previamente registrado
         if (pagoRemovido && ordenAEditar && String(ordenAEditar.estado_pago).toLowerCase() === 'pagado') {
             const movRef = collection(db, COL_MOVIMIENTOS);
             await addDoc(movRef, {
@@ -528,7 +561,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
     if (!cajaAbierta) return;
     setOrden(prev => {
         const nuevaOrden = [...prev];
-        nuevaOrden[idx] = { ...nuevaOrden[idx], observacion: valor.toUpperCase() };
+        nuevaOrden[idx] = { ...nuevaOrden[idx], observacion: valor };
         return nuevaOrden;
     });
   };
@@ -536,12 +569,15 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
   const categorias = [...new Set(menu.map(m => m.categoria))].filter(Boolean);
 
   const isPagado = pagoTemporal || (ordenAEditar && String(ordenAEditar.estado_pago).toLowerCase() === 'pagado' && !pagoRemovido);
+  
+  const isMetodoSeleccionado = modoPago === 'unico' 
+    ? metodoUnico !== '' 
+    : Object.values(montosMixtos).some(v => getRawNumber(v) > 0);
 
   if (cargando && !orden.length) return <div className="h-full flex items-center justify-center font-black uppercase text-slate-300 animate-pulse bg-slate-50 italic tracking-widest">Iniciando Isakari POS...</div>;
 
   return (
     <div className="flex h-full bg-slate-100 overflow-hidden font-sans text-gray-800 relative main-app-container">
-      {/* NOTIFICACIÓN FLOTANTE */}
       {notificacion.mostrar && (
         <div className={`fixed bottom-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-emerald-500 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🚫' : '✅'}</span>
@@ -564,15 +600,17 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                   <button 
                     onClick={() => {
                         setMostrarModalPago(true);
-                        setAplicarDescuento(false);
-                        setModoPago('unico');
-                        setMetodosHabilitados({ Efectivo: true, Transferencia: false, Débito: false });
-                        setMontosMixtos({ Efectivo: '', Transferencia: '', Débito: '' });
+                        if (!isPagado) {
+                            setModoPago('unico');
+                            setMetodoUnico(''); 
+                            setMetodosHabilitados({ Efectivo: true, Transferencia: false, Débito: false });
+                            setMontosMixtos({ Efectivo: '', Transferencia: '', Débito: '' });
+                        }
                     }} 
                     disabled={!cajaAbierta || orden.length === 0}
-                    className={`${!cajaAbierta || orden.length === 0 ? 'bg-slate-300 cursor-not-allowed' : (isPagado ? 'bg-emerald-500 text-white ring-2 ring-emerald-300' : 'bg-green-600 hover:bg-green-700 active:scale-95 text-white')} px-3 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg transition-all`}
+                    className={`${!cajaAbierta || orden.length === 0 ? 'bg-slate-300 cursor-not-allowed' : (isPagado ? 'bg-emerald-500 text-white ring-2 ring-emerald-300' : (aplicarDescuento ? 'bg-amber-500 text-white ring-2 ring-amber-300' : 'bg-green-600 hover:bg-green-700 active:scale-95 text-white'))} px-3 py-2 rounded-2xl text-[10px] font-black uppercase shadow-lg transition-all`}
                   >
-                      {isPagado ? '¡COBRADO! (VER)' : 'COBRAR'}
+                      {isPagado ? '¡COBRADO! (VER)' : (aplicarDescuento ? 'CON DCTO (COBRAR)' : 'COBRAR')}
                   </button>
                   <button 
                     onClick={() => enviarCocina()} 
@@ -620,7 +658,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
               <span className="text-2xl font-black tracking-tighter leading-none">${totalFinal.toLocaleString('es-CL')}</span>
            </div>
 
-           <textarea placeholder="OBSERVACIONES PARA COCINA..." className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner disabled:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed" value={descripcionGeneral} onChange={e => setDescripcionGeneral(e.target.value)} disabled={!cajaAbierta} />
+           <textarea placeholder="OBSERVACIONES PARA COCINA..." className="w-full p-3 border-2 border-gray-100 rounded-2xl text-[10px] uppercase font-bold focus:border-red-500 outline-none resize-none h-16 bg-white shadow-inner disabled:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed whitespace-pre-wrap" value={descripcionGeneral} onChange={e => setDescripcionGeneral(e.target.value)} disabled={!cajaAbierta} />
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50 custom-scrollbar">
@@ -631,7 +669,19 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                     <span className="text-red-600 bg-red-50 px-2 py-0.5 rounded-lg h-fit text-[10px]">{item.cantidad}x</span>
                 </div>
                 <div className="mt-2 flex gap-2 items-center">
-                    <input type="text" placeholder="Nota item..." className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner disabled:opacity-50 disabled:bg-gray-100 disabled:cursor-not-allowed" value={item.observacion || ''} onChange={(e) => handleNotaItemChange(idx, e.target.value)} disabled={!cajaAbierta} />
+                    {/* ESTE ES EL NUEVO TEXTAREA MULTILÍNEA */}
+                    <textarea 
+                        rows={1}
+                        placeholder="Nota" 
+                        className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[9px] font-black uppercase outline-none focus:border-blue-400 focus:bg-white transition-all shadow-inner disabled:opacity-50 disabled:bg-gray-100 disabled:cursor-not-allowed resize-none overflow-hidden whitespace-pre-wrap" 
+                        value={item.observacion || ''} 
+                        onChange={(e) => {
+                            e.target.style.height = 'auto';
+                            e.target.style.height = e.target.scrollHeight + 'px';
+                            handleNotaItemChange(idx, e.target.value);
+                        }} 
+                        disabled={!cajaAbierta} 
+                    />
                     <div className="flex items-center bg-slate-100 rounded-lg p-0.5 flex-shrink-0">
                         <button disabled={!cajaAbierta} onClick={() => ajustarCantidad(item.id, -1)} className="px-2 text-gray-500 font-black disabled:opacity-30 disabled:cursor-not-allowed">-</button>
                         <span className="px-2 text-[10px] font-black text-gray-800 bg-white rounded shadow-sm">{item.cantidad}</span>
@@ -644,39 +694,102 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
         </div>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto bg-slate-50 custom-scrollbar no-print">
-        {!categoriaActual ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 animate-in slide-in-from-bottom-4 duration-300">
-            {categorias.length > 0 ? categorias.map(cat => (
-              <button key={cat} onClick={() => setCategoriaActual(cat)} className="h-48 bg-white border-4 border-slate-100 rounded-[3.5rem] shadow-sm hover:shadow-2xl transition-all font-black uppercase text-xs flex flex-col items-center justify-center gap-4 group">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-3xl group-hover:bg-red-50 transition-colors shadow-inner">🍱</div>
-                <span>{cat}</span>
-              </button>
-            )) : (
-              <div className="col-span-full py-20 text-center text-slate-300 font-black uppercase text-xs tracking-[0.3em]">
-                {cargando ? "Cargando Menú..." : "No hay productos en el Menú"}
+      <main className="flex-1 flex flex-col p-8 overflow-hidden bg-slate-50 no-print">
+        {/* BUSCADOR DE PRODUCTOS FIJO */}
+        <div className="mb-6 relative group flex-shrink-0">
+            <i className="bi bi-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-red-500 transition-colors text-lg"></i>
+            <input 
+                type="text" 
+                placeholder="BUSCAR PRODUCTO (NOMBRE)..." 
+                className="w-full pl-12 pr-10 py-4 rounded-[2rem] border-2 border-slate-100 bg-white font-black uppercase text-sm outline-none focus:border-red-300 focus:shadow-md transition-all placeholder:text-slate-300"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+            />
+            {busqueda && (
+                <button onClick={() => setBusqueda('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-red-500 transition-colors text-xl">
+                    <i className="bi bi-x-circle-fill"></i>
+                </button>
+            )}
+        </div>
+
+        {/* CONTENIDO (GRILLAS SCROLLABLES) */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+            {busqueda ? (
+                <div className="animate-fade-in">
+                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Resultados de búsqueda</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                    {menu.filter(m => String(m.nombre || '').toLowerCase().includes(busqueda.toLowerCase())).map(item => (
+                        <button key={item.id} onClick={() => agregarAlPedido(item)} className="p-6 bg-white border-2 border-slate-100 rounded-[2.5rem] flex flex-col items-center justify-between shadow-sm hover:shadow-2xl transition-all active:scale-95 min-h-[19rem] group relative overflow-hidden">
+                        {/* ETIQUETA DE CATEGORÍA AGREGADA EN LA TARJETA (CENTRADA Y EN MORADO) */}
+                        {item.categoria && (
+                            <span 
+                                className="absolute top-3 left-1/2 -translate-x-1/2 bg-purple-100 text-purple-800 text-[8px] font-black uppercase px-3 py-1 rounded-full tracking-wider shadow-sm border border-purple-200 truncate max-w-[85%] whitespace-nowrap"
+                                title={item.categoria}
+                            >
+                                {item.categoria}
+                            </span>
+                        )}
+                        
+                        <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-4xl group-hover:scale-110 transition-transform shadow-inner mt-4">🍣</div>
+                        <div className="flex flex-col items-center gap-2 w-full flex-1 justify-center mt-4">
+                            <span className="font-black text-[13px] uppercase text-center text-slate-800 line-clamp-2 leading-tight px-1">{item.nombre}</span>
+                            {item.descripcion && <span className="text-[10px] text-slate-600 text-center line-clamp-3 px-1 leading-tight lowercase first-letter:uppercase italic font-medium">{item.descripcion}</span>}
+                        </div>
+                        <div className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs mt-3 shadow-lg group-hover:bg-red-700 transition-colors">
+                            ${item.precio.toLocaleString('es-CL')}
+                        </div>
+                        </button>
+                    ))}
+                    {menu.filter(m => String(m.nombre || '').toLowerCase().includes(busqueda.toLowerCase())).length === 0 && (
+                        <div className="col-span-full py-20 text-center text-slate-300 font-black uppercase text-xs tracking-[0.3em]">
+                            No se encontraron coincidencias
+                        </div>
+                    )}
+                    </div>
+                </div>
+            ) : !categoriaActual ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6 animate-in slide-in-from-bottom-4 duration-300">
+                {categorias.length > 0 ? categorias.map(cat => (
+                  <button key={cat} onClick={() => setCategoriaActual(cat)} className="h-48 bg-white border-4 border-slate-100 rounded-[3.5rem] shadow-sm hover:shadow-2xl transition-all font-black uppercase text-xs flex flex-col items-center justify-center gap-4 group">
+                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-3xl group-hover:bg-red-50 transition-colors shadow-inner">🍱</div>
+                    <span>{cat}</span>
+                  </button>
+                )) : (
+                  <div className="col-span-full py-20 text-center text-slate-300 font-black uppercase text-xs tracking-[0.3em]">
+                    {cargando ? "Cargando Menú..." : "No hay productos en el Menú"}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="animate-fade-in">
+                <button onClick={() => setCategoriaActual(null)} className="mb-6 p-3 bg-white rounded-2xl border-2 border-slate-100 text-red-600 shadow-sm transition-colors hover:bg-red-50 font-black text-xs uppercase">⬅ Volver</button>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                  {menu.filter(m => m.categoria === categoriaActual).map(item => (
+                    <button key={item.id} onClick={() => agregarAlPedido(item)} className="p-6 bg-white border-2 border-slate-100 rounded-[2.5rem] flex flex-col items-center justify-between shadow-sm hover:shadow-2xl transition-all active:scale-95 min-h-[19rem] group relative overflow-hidden">
+                      {/* ETIQUETA DE CATEGORÍA TAMBIÉN AGREGADA EN LA VISTA NORMAL (CENTRADA Y EN MORADO) */}
+                      {item.categoria && (
+                        <span 
+                            className="absolute top-3 left-1/2 -translate-x-1/2 bg-purple-100 text-purple-800 text-[8px] font-black uppercase px-3 py-1 rounded-full tracking-wider shadow-sm border border-purple-200 truncate max-w-[85%] whitespace-nowrap"
+                            title={item.categoria}
+                        >
+                            {item.categoria}
+                        </span>
+                      )}
+                      
+                      <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-4xl group-hover:scale-110 transition-transform shadow-inner mt-4">🍣</div>
+                      <div className="flex flex-col items-center gap-2 w-full flex-1 justify-center mt-4">
+                        <span className="font-black text-[13px] uppercase text-center text-slate-800 line-clamp-2 leading-tight px-1">{item.nombre}</span>
+                        {item.descripcion && <span className="text-[10px] text-slate-600 text-center line-clamp-3 px-1 leading-tight lowercase first-letter:uppercase italic font-medium">{item.descripcion}</span>}
+                      </div>
+                      <div className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs mt-3 shadow-lg group-hover:bg-red-700 transition-colors">
+                        ${item.precio.toLocaleString('es-CL')}
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
-          </div>
-        ) : (
-          <div className="animate-fade-in">
-            <button onClick={() => setCategoriaActual(null)} className="mb-6 p-3 bg-white rounded-2xl border-2 border-slate-100 text-red-600 shadow-sm transition-colors hover:bg-red-50 font-black text-xs uppercase">⬅ Volver</button>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {menu.filter(m => m.categoria === categoriaActual).map(item => (
-                <button key={item.id} onClick={() => agregarAlPedido(item)} className="p-6 bg-white border-2 border-slate-100 rounded-[2.5rem] flex flex-col items-center justify-between shadow-sm hover:shadow-2xl transition-all active:scale-95 min-h-[18rem] group">
-                  <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center text-4xl group-hover:scale-110 transition-transform shadow-inner">🍣</div>
-                  <div className="flex flex-col items-center gap-2 w-full flex-1 justify-center mt-4">
-                    <span className="font-black text-[13px] uppercase text-center text-slate-800 line-clamp-2 leading-tight px-1">{item.nombre}</span>
-                    {item.descripcion && <span className="text-[10px] text-slate-600 text-center line-clamp-3 px-1 leading-tight lowercase first-letter:uppercase italic font-medium">{item.descripcion}</span>}
-                  </div>
-                  <div className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs mt-3 shadow-lg group-hover:bg-red-700 transition-colors">
-                    ${item.precio.toLocaleString('es-CL')}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        </div>
       </main>
 
       {/* --- MODAL DE COBRO --- */}
@@ -686,7 +799,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                 
                 <div className="flex justify-between items-start">
                   <div>
-                      <h3 className="font-black uppercase text-lg text-slate-900 m-0 tracking-tighter">Cobrar Pedido</h3>
+                      <h3 className="font-black uppercase text-lg text-slate-900 m-0 tracking-tighter">Opciones de Pago</h3>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">#{numeroPedidoVisual} • {nombreCliente || 'Cliente'}</p>
                   </div>
                   <button onClick={() => setModoPago(modoPago === 'unico' ? 'mixto' : 'unico')} className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase transition-all ${modoPago === 'mixto' ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 text-slate-400'}`}>
@@ -709,7 +822,13 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                 {modoPago === 'unico' ? (
                     <div className="grid grid-cols-3 gap-2">
                         {['Efectivo', 'Transferencia', 'Débito'].map(m => (
-                            <button key={m} onClick={() => setMetodoUnico(m)} className={`py-4 rounded-2xl font-black text-[10px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}>{m}</button>
+                            <button 
+                                key={m} 
+                                onClick={() => setMetodoUnico(metodoUnico === m ? '' : m)} 
+                                className={`py-4 rounded-2xl font-black text-[10px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}
+                            >
+                                {m}
+                            </button>
                         ))}
                     </div>
                 ) : (
@@ -727,19 +846,19 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
 
                 <div className="flex flex-col gap-3 mt-4">
                     <div className="flex gap-3">
-                        <button onClick={() => setMostrarModalPago(false)} className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-50 rounded-2xl">Cancelar</button>
-                        <button onClick={handleConfirmarCobro} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-green-700 active:scale-95 transition-all">Confirmar Cobro</button>
+                        <button onClick={() => setMostrarModalPago(false)} className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-50 rounded-2xl">Volver</button>
+                        <button onClick={handleConfirmarCobro} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-green-700 active:scale-95 transition-all">
+                          {isMetodoSeleccionado ? 'Confirmar Cobro' : 'Guardar y Dejar Pendiente'}
+                        </button>
                     </div>
 
                     {isPagado && (
                         <button 
                             onClick={() => {
-                                if (window.confirm("¿Estás seguro de querer anular el pago de este pedido?")) {
-                                    setPagoTemporal(null);
-                                    setPagoRemovido(true);
-                                    setMostrarModalPago(false);
-                                    notificar("PAGO ANULADO. ACTUALICE EL PEDIDO PARA GUARDAR CAMBIOS.", "success");
-                                }
+                                setPagoTemporal(null);
+                                setPagoRemovido(true);
+                                setMostrarModalPago(false);
+                                notificar("PAGO ANULADO. ACTUALICE EL PEDIDO PARA GUARDAR CAMBIOS.", "success");
                             }}
                             className="w-full py-3 bg-red-50 text-red-600 rounded-2xl text-[9px] font-black uppercase border border-red-100 hover:bg-red-600 hover:text-white transition-all shadow-sm"
                         >
@@ -772,7 +891,7 @@ export default function TomarPedido({ ordenAEditar, onTerminarEdicion, user: pro
                   estadoPago={pagoTemporal ? 'Pagado' : (ordenAEditar?.estado_pago || 'Pendiente')}
                   metodoPago={pagoTemporal ? pagoTemporal.metodo_pago : (ordenAEditar?.metodo_pago || '')}
                   detallesPago={pagoTemporal ? pagoTemporal.detalles_pago : (ordenAEditar?.detalles_pago || [])}
-                  descuento={pagoTemporal ? pagoTemporal.descuento : (ordenAEditar?.descuento || 0)}
+                  descuento={montoDescuento}
                 />
                 <button onClick={() => setMostrarVistaPrevia(false)} className="w-full mt-6 py-4 bg-slate-900 text-white font-black uppercase rounded-2xl shadow-xl no-print hover:bg-black transition-colors">Cerrar Vista</button>
             </div>

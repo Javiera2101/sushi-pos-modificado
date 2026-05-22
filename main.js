@@ -7,12 +7,12 @@ const fs = require('fs');
 const os = require('os');
 const { exec } = require('child_process');
 
-// 1. SOLUCIÓN A PANTALLA BLANCA Y RENDIMIENTO
+// Desactivar aceleración por hardware para evitar pantallas blancas
 app.disableHardwareAcceleration();
 
 let mainWindow;
 
-// 2. PROTECCIÓN CONTRA INSTANCIA MÚLTIPLE
+// Control de instancia única para evitar múltiples ventanas abiertas
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
@@ -40,6 +40,7 @@ if (!gotTheLock) {
       minWidth: 800,
       minHeight: 600,
       title: "Isakari Sushi POS",
+      autoHideMenuBar: true,
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false 
@@ -48,6 +49,7 @@ if (!gotTheLock) {
     });
 
     mainWindow.setMenuBarVisibility(false);
+    mainWindow.maximize(); 
 
     if (app.isPackaged) {
       mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
@@ -64,7 +66,7 @@ if (!gotTheLock) {
   app.whenReady().then(createWindow);
 }
 
-// 3. LÓGICA DE IMPRESIÓN RAW (ESC/POS) PARA 80MM (LINUX)
+// --- ESCUCHA DE EVENTOS DE IMPRESIÓN FÍSICA RAW (ESC/POS 80mm) ---
 ipcMain.on('imprimir-ticket-raw', (event, data) => {
   const ESC = '\x1B';
   const GS = '\x1D';
@@ -77,8 +79,10 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
   const CUT = GS + 'V' + '\x41' + '\x00'; 
   const OPEN_DRAWER = ESC + 'p' + '\x00' + '\x19' + '\xFA'; 
 
+  // Formateador de moneda chilena nativo para el ticket
   const fmt = (num) => '$' + parseInt(num || 0).toLocaleString('es-CL');
   
+  // Limpia caracteres especiales y acentos para evitar símbolos extraños en la impresora térmica
   const limpiarTexto = (input) => {
     if (!input) return "";
     let str = input;
@@ -94,41 +98,55 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
     }
     return str.normalize("NFD")
               .replace(/[\u0300-\u036f]/g, "") 
-              .replace(/[^\x20-\x7E]/g, "")    
+              // IMPORTANTE: Aquí ahora respetamos \n (saltos de línea) y \r (retorno de carro)
+              .replace(/[^\x20-\x7E\n\r]/g, "")    
               .toUpperCase();
   };
 
+  // Ajuste automático de saltos de línea según el ancho del papel
   const wrapText = (text, limit = 48) => {
     if (!text) return "";
-    const words = text.split(' ');
-    let lines = [];
-    let currentLine = '';
+    // Separamos el texto usando los saltos de línea (enters) que haya escrito el usuario
+    const paragraphs = text.split(/\r?\n/);
+    let finalLines = [];
 
-    words.forEach(word => {
-      if (word.length > limit) {
-        if (currentLine) lines.push(currentLine);
-        lines.push(word.substring(0, limit));
-        currentLine = word.substring(limit);
-        return;
+    paragraphs.forEach(paragraph => {
+      // Si hay un enter en blanco, lo mantenemos como una línea vacía
+      if (paragraph.trim() === '') {
+          finalLines.push('');
+          return;
       }
-      const testLine = currentLine ? currentLine + ' ' + word : word;
-      if (testLine.length <= limit) {
-        currentLine = testLine;
-      } else {
-        lines.push(currentLine);
-        currentLine = word;
-      }
+      const words = paragraph.split(' ');
+      let currentLine = '';
+
+      words.forEach(word => {
+        if (word.length > limit) {
+          if (currentLine) finalLines.push(currentLine);
+          finalLines.push(word.substring(0, limit));
+          currentLine = word.substring(limit);
+          return;
+        }
+        const testLine = currentLine ? currentLine + ' ' + word : word;
+        if (testLine.length <= limit) {
+          currentLine = testLine;
+        } else {
+          finalLines.push(currentLine);
+          currentLine = word;
+        }
+      });
+
+      if (currentLine) finalLines.push(currentLine);
     });
 
-    if (currentLine) lines.push(currentLine);
-    return lines.join('\n');
+    return finalLines.join('\n');
   };
 
   let ticket = INIT;
-  const ANCHO = 48; // Estándar para 80mm
+  const ANCHO = 48; // Ancho máximo de caracteres en impresoras térmicas de 80mm
   const SEPARATOR = "-".repeat(ANCHO) + "\n";
 
   try {
+      // --- CASO 1: IMPRESIÓN DE INVENTARIO ---
       if (data.tipo === 'INVENTARIO') {
         ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
         ticket += "CONTROL DE INVENTARIO\n";
@@ -145,10 +163,46 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         ticket += "\n" + SEPARATOR;
         ticket += ALIGN_CENTER + "FIN DEL REPORTE\n\n\n\n" + CUT;
       } 
-      else {
-        ticket += OPEN_DRAWER;
+      
+      // --- CASO 2: IMPRESIÓN DE CIERRE DE CAJA DIARIO (Tu solicitud) ---
+      else if (data.tipo === 'CIERRE_CAJA') {
         ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
-        ticket += "Calle Comercio #1757\n+56 9 813 51797\n\n";
+        ticket += "REPORTE DE CIERRE DE CAJA\n";
+        ticket += `FECHA TURNO: ${data.fecha || ''}\n`;
+        if (data.usuario) {
+            ticket += `USUARIO: ${limpiarTexto(data.usuario)}\n`;
+        }
+        ticket += SEPARATOR + "\n";
+        ticket += ALIGN_LEFT;
+
+        // Estructura de Montos de Caja de forma ordenada y alineada a la derecha
+        ticket += `CAJA INICIAL:`.padEnd(30, ' ') + fmt(data.montoApertura).padStart(18, ' ') + "\n";
+        ticket += `TOTAL VENTAS NETAS:`.padEnd(30, ' ') + fmt(data.totalVentasNetas).padStart(18, ' ') + "\n";
+        ticket += `REPARTOS:`.padEnd(30, ' ') + fmt(data.totalEnvios).padStart(18, ' ') + "\n";
+        ticket += `GASTOS CAJA:`.padEnd(30, ' ') + `-${fmt(data.totalGastos)}`.padStart(18, ' ') + "\n";
+        
+        ticket += SEPARATOR;
+        ticket += BOLD_ON + "INGRESOS POR MEDIO DE PAGO:\n" + BOLD_OFF;
+        ticket += ` - EFECTIVO:`.padEnd(30, ' ') + fmt(data.totalEfectivo).padStart(18, ' ') + "\n";
+        ticket += ` - TRANSFERENCIAS:`.padEnd(30, ' ') + fmt(data.totalTransferencia).padStart(18, ' ') + "\n";
+        ticket += ` - DEBITO:`.padEnd(30, ' ') + fmt(data.totalDebito).padStart(18, ' ') + "\n";
+        
+        ticket += SEPARATOR;
+        ticket += BOLD_ON + `UTILIDAD NETA DIARIA:`.padEnd(30, ' ') + fmt(data.totalGanancia).padStart(18, ' ') + "\n" + BOLD_OFF;
+        ticket += SEPARATOR;
+        
+        ticket += ALIGN_CENTER + BOLD_ON + "EFECTIVO EN CAJA:\n";
+        ticket += `${fmt(data.montoCierreSistema)}\n\n` + BOLD_OFF;
+        ticket += SEPARATOR;
+        
+        ticket += ALIGN_CENTER + "FIN DEL REPORTE DE CAJA\n\n\n\n" + CUT;
+      }
+      
+      // --- CASO 3: IMPRESIÓN DE BOLETA DE VENTA NORMAL ---
+      else {
+        ticket += OPEN_DRAWER; // Abre la gaveta antes de imprimir
+        ticket += ALIGN_CENTER + BOLD_ON + "ISAKARI SUSHI\n" + BOLD_OFF;
+        ticket += "Calle Comercio #1757\n+56 9 8421 7160\n\n";
         ticket += BOLD_ON + `PEDIDO #${data.numeroPedido}\n` + BOLD_OFF;
         
         ticket += `Cliente: ${wrapText(limpiarTexto(data.cliente || 'CLIENTE'), 38)}\n`;
@@ -164,11 +218,12 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         const orden = Array.isArray(data.orden) ? data.orden : [];
         orden.forEach(item => {
           const nombreLimpio = limpiarTexto(item.nombre);
+          // CORRECCIÓN: Se reemplazó la variable inexistente "nombreLinter" por "nombreLimpio"
           const textoCompleto = `${item.cantidad} x ${nombreLimpio}`;
           
           ticket += BOLD_ON + wrapText(textoCompleto, ANCHO) + BOLD_OFF + "\n";
 
-          const esProductoLargo = nombreLimpio.includes("MIXTO") || nombreLimpio.includes("PREMIUM") || nombreLimpio.includes("PROMO") || nombreLimpio.includes("TABLA") || nombreLimpio.includes("COMBINADO");
+          const esProductoLargo = nombreLimpio.includes("MIXTO") || nombreLimpio.includes("PREMIUM");
 
           let descTexto = "";
           if (!esProductoLargo && item.descripcion) {
@@ -204,7 +259,7 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
 
         if (data.descuento && parseInt(data.descuento) > 0) {
             ticket += ALIGN_RIGHT + `Subtotal: ${fmt(data.total)}\n`;
-            ticket += ALIGN_RIGHT + `DCTO 10%: -${fmt(data.descuento)}\n`;
+            ticket += ALIGN_RIGHT + `DCTO 10% (PROD): -${fmt(data.descuento)}\n`;
             ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL FINAL: ${fmt(data.total - data.descuento)}\n` + BOLD_OFF;
         } else {
             ticket += ALIGN_CENTER + "\n" + BOLD_ON + `TOTAL: ${fmt(data.total)}\n` + BOLD_OFF;
@@ -240,18 +295,18 @@ ipcMain.on('imprimir-ticket-raw', (event, data) => {
         ticket += ALIGN_CENTER + "\nGracias por su compra!\n\n\n" + CUT;
       }
 
+      // Guardar de forma temporal el binario del ticket
       const uniqueId = Date.now();
       const tempPath = path.join(os.tmpdir(), `ticket_80_${uniqueId}.bin`);
       fs.writeFileSync(tempPath, ticket, { encoding: 'binary' });
 
-      // COMANDO DE IMPRESIÓN SEGURO PARA LINUX EMPAQUETADO
-      // Usamos la ruta absoluta porque los íconos de escritorio no suelen heredar el PATH
+      // Comando lp para enviar raw en sistemas Linux (POS estándar)
       const comando = `/usr/bin/lp -d impresora_pos80 -o raw "${tempPath}"`;
 
       exec(comando, (error) => {
         if (error) {
             console.error(`❌ Error con /usr/bin/lp: ${error.message}`);
-            // Fallback al comando lp simple por si el sistema lo tiene en otra ruta
+            // Fallback lp general
             exec(`lp -d impresora_pos80 -o raw "${tempPath}"`, (err2) => {
                 if (err2) console.error("❌ Fallback error:", err2.message);
                 setTimeout(() => { try { fs.unlinkSync(tempPath); } catch(e) {} }, 5000);

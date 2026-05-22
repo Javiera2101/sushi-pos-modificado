@@ -4,13 +4,14 @@ import {
   getFirestore, 
   collection, 
   query, 
-  where, 
+  where,   
   onSnapshot, 
   doc, 
   updateDoc, 
   deleteDoc,
   getDocs,
-  enableIndexedDbPersistence
+  enableIndexedDbPersistence,
+  addDoc
 } from 'firebase/firestore';
 import { 
   getAuth, 
@@ -106,18 +107,28 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
             
             <table className="w-full mb-2">
                 <tbody>
-                    {orden?.map((item, idx) => (
-                        <tr key={idx} className="align-top border-b border-gray-50 last:border-0">
-                            <td className="pr-1 font-bold">{item.cantidad}x</td>
-                            <td className="w-full uppercase">
-                                <div className="font-bold">{item.nombre}</div>
-                                {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600">↳ {item.observacion}</div>}
-                            </td>
-                            <td className="text-right whitespace-nowrap pl-1">
-                                ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString('es-CL')}
-                            </td>
-                        </tr>
-                    ))}
+                    {orden?.map((item, idx) => {
+                        const nombreLimpio = String(item.nombre || '').toUpperCase();
+                        const esProductoLargo = nombreLimpio.includes("MIXTO") || nombreLimpio.includes("PREMIUM");
+
+                        return (
+                            <tr key={idx} className="align-top border-b border-gray-50 last:border-0">
+                                <td className="pr-1 font-bold">{item.cantidad}x</td>
+                                <td className="w-full uppercase">
+                                    <div className="font-bold">{item.nombre}</div>
+                                    
+                                    {(!esProductoLargo && item.descripcion) && (
+                                        <div className="text-[8px] text-gray-500 leading-tight mt-0.5 whitespace-pre-wrap">{item.descripcion}</div>
+                                    )}
+                                    
+                                    {item.observacion && <div className="text-[8px] italic lowercase mt-0.5 text-gray-600 whitespace-pre-wrap">↳ {item.observacion}</div>}
+                                </td>
+                                <td className="text-right whitespace-nowrap pl-1">
+                                    ${((Number(item.precio) || 0) * (Number(item.cantidad) || 0)).toLocaleString('es-CL')}
+                                </td>
+                            </tr>
+                        );
+                    })}
                     {tipoEntrega === 'REPARTO' && Number(costoDespacho) > 0 && (
                         <tr className="border-t border-dashed">
                             <td colSpan="2" className="pt-1 uppercase">Envío:</td>
@@ -153,8 +164,8 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
 
             {(descripcion || (tipoEntrega === 'REPARTO' && notaPersonal)) && (
                 <div className="mt-3 border-t border-dashed pt-1 space-y-1">
-                    {tipoEntrega === 'REPARTO' && notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1">Nota: {notaPersonal}</div>}
-                    {descripcion && <div className="italic text-[8px] uppercase opacity-75">Obs Cocina: {descripcion}</div>}
+                    {tipoEntrega === 'REPARTO' && notaPersonal && <div className="uppercase font-bold text-[9px] bg-gray-50 p-1 whitespace-pre-wrap">Nota: {notaPersonal}</div>}
+                    {descripcion && <div className="italic text-[8px] uppercase opacity-75 whitespace-pre-wrap">Obs Cocina: {descripcion}</div>}
                 </div>
             )}
 
@@ -167,8 +178,10 @@ const Ticket = ({ orden, total, numeroPedido, tipoEntrega, fecha, hora, cliente,
     );
 };
 
-export default function HistorialPedidos({ onEditar, user }) {
+export default function HistorialPedidos({ onEditar, user: propUser }) {
+  const [user, setUser] = useState(propUser || null);
   const [notificacion, setNotificacion] = useState({ mostrar: false, mensaje: '', tipo: '' });
+  
   const notificar = (mensaje, tipo = 'success') => {
     setNotificacion({ mostrar: true, mensaje, tipo });
     setTimeout(() => setNotificacion({ mostrar: false, mensaje: '', tipo: '' }), 3000);
@@ -178,12 +191,13 @@ export default function HistorialPedidos({ onEditar, user }) {
   const [cargando, setCargando] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState('todos');
   const [fechaFiltro, setFechaFiltro] = useState(getLocalISODate());
+  const [busqueda, setBusqueda] = useState(''); 
   
   const [pedidoParaCobrar, setPedidoParaCobrar] = useState(null);
   const [pedidoParaEliminar, setPedidoParaEliminar] = useState(null); 
   const [procesandoPago, setProcesandoPago] = useState(false);
   const [modoPago, setModoPago] = useState('unico'); 
-  const [metodoUnico, setMetodoUnico] = useState('Efectivo');
+  const [metodoUnico, setMetodoUnico] = useState(''); 
   const [aplicarDescuento, setAplicarDescuento] = useState(false);
   
   const [montosMixtos, setMontosMixtos] = useState({ Efectivo: '', Transferencia: '', Débito: '' });
@@ -194,11 +208,20 @@ export default function HistorialPedidos({ onEditar, user }) {
   const colOrdenes = user?.email === "prueba@isakari.com" ? "ordenes_pruebas" : "ordenes";
   const colMovimientos = user?.email === "prueba@isakari.com" ? "movimientos_pruebas" : "movimientos";
 
-  const getRawNumber = (v) => Number(v.toString().replace(/\./g, '')) || 0;
+  // BLINDAJE CONTRA UNDEFINED EN CÁLCULOS
+  const getRawNumber = (v) => Number(String(v || '').replace(/\./g, '')) || 0;
   const formatPeso = (v) => (Number(v) || 0).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
-  const formatInput = (v) => v.toString().replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const formatInput = (v) => String(v || '').replace(/\D/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-  // OPTIMIZACIÓN DE LECTURAS (Con ruta corregida a la raíz)
+  // Asegurarnos de que el usuario se mantenga sincronizado
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // OPTIMIZACIÓN DE LECTURAS
   useEffect(() => {
     if (!user) return;
     setCargando(true);
@@ -247,7 +270,7 @@ export default function HistorialPedidos({ onEditar, user }) {
             numeroPedido: pedido.numero_pedido,
             cliente: pedido.nombre_cliente,
             orden: pedido.items, 
-            total: pedido.total_pagado || pedido.total,
+            total: pedido.total, 
             costoDespacho: pedido.costo_despacho || 0,
             tipoEntrega: pedido.tipo_entrega,
             direccion: pedido.direccion,
@@ -286,16 +309,15 @@ export default function HistorialPedidos({ onEditar, user }) {
     const nuevoEstado = !metodosHabilitados[metodo];
     setMetodosHabilitados(prev => ({ ...prev, [metodo]: nuevoEstado }));
     
-    // Cálculo seguro del descuento solo sobre productos en el historial
-    const totalOriginal = pedidoParaCobrar?.total || 0;
-    const subtotalProductos = pedidoParaCobrar?.items?.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) || 0;
+    const totalOriginal = Number(pedidoParaCobrar?.total) || 0;
+    const subtotalProductos = (pedidoParaCobrar?.items || []).reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0);
     const desc = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
     const totalObjetivo = totalOriginal - desc;
 
     if (nuevoEstado) {
       const sumaActual = Object.entries(montosMixtos)
         .filter(([m]) => metodosHabilitados[m] && m !== metodo)
-        .reduce((acc, [_, v]) => acc + getRawNumber(v), 0);
+        .reduce((acc, [m, v]) => acc + getRawNumber(v), 0);
       const faltante = Math.max(0, totalObjetivo - sumaActual);
       setMontosMixtos(prev => ({ ...prev, [metodo]: formatInput(faltante) }));
     } else {
@@ -306,62 +328,103 @@ export default function HistorialPedidos({ onEditar, user }) {
   const confirmarPago = async () => {
     if (!pedidoParaCobrar) return;
     const p = pedidoParaCobrar;
+    const wasPaid = String(p.estado_pago).toLowerCase() === 'pagado';
+    setProcesandoPago(true); 
     
-    // Cálculo de descuento basado únicamente en los productos
-    const subtotalProductos = p.items?.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) || 0;
-    const montoDescuento = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
-    const totalACobrar = p.total - montoDescuento;
-
-    const metodosFinales = modoPago === 'unico' 
-      ? [{ metodo: metodoUnico, monto: totalACobrar }]
-      : Object.entries(montosMixtos)
-          .filter(([m]) => metodosHabilitados[m] && getRawNumber(montosMixtos[m]) > 0)
-          .map(([m, v]) => ({ metodo: m, monto: getRawNumber(v) }));
-    
-    const totalIngresado = metodosFinales.reduce((acc, item) => acc + item.monto, 0);
-    
-    if (totalIngresado < totalACobrar && modoPago === 'mixto') {
-      notificar(`FALTAN ${formatPeso(totalACobrar - totalIngresado)}`, "error");
-      return;
-    }
-
-    setProcesandoPago(true);
-
-    const datosPago = {
-      estado_pago: 'Pagado',
-      metodo_pago: modoPago === 'unico' ? metodoUnico : 'Mixto',
-      detalles_pago: metodosFinales,
-      descuento: montoDescuento,
-      total_pagado: totalIngresado,
-      fecha_pago: Timestamp.now()
-    };
-
     try {
-        const pedidoRef = doc(db, colOrdenes, p.id);
+        const subtotalProductos = (p.items || []).reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0);
+        const montoDescuento = aplicarDescuento ? Math.round(subtotalProductos * 0.1) : 0;
+        const totalACobrar = Math.max(0, (Number(p.total) || 0) - montoDescuento);
+
+        let metodosFinales = [];
+        let metodoGeneral = '';
+
+        if (modoPago === 'unico') {
+            if (!metodoUnico) {
+                await updateDoc(doc(db, colOrdenes, String(p.id)), {
+                    descuento: Number(montoDescuento) || 0
+                });
+                notificar("OPCIONES GUARDADAS. EL PEDIDO SIGUE PENDIENTE.", "success");
+                setPedidoParaCobrar(null);
+                setAplicarDescuento(false);
+                setProcesandoPago(false);
+                return;
+            }
+            metodosFinales = [{ metodo: String(metodoUnico), monto: totalACobrar }];
+            metodoGeneral = String(metodoUnico);
+        } else {
+            metodosFinales = Object.entries(montosMixtos)
+                .filter(([m]) => metodosHabilitados[m] && getRawNumber(montosMixtos[m]) > 0)
+                .map(([m, v]) => ({ metodo: String(m), monto: getRawNumber(v) || 0 }));
+            
+            if (metodosFinales.length === 0) {
+                await updateDoc(doc(db, colOrdenes, String(p.id)), {
+                    descuento: Number(montoDescuento) || 0
+                });
+                notificar("OPCIONES GUARDADAS. EL PEDIDO SIGUE PENDIENTE.", "success");
+                setPedidoParaCobrar(null);
+                setAplicarDescuento(false);
+                setProcesandoPago(false);
+                return;
+            }
+            metodoGeneral = 'Mixto';
+        }
+        
+        const totalIngresado = metodosFinales.reduce((acc, item) => acc + item.monto, 0);
+        
+        if (totalIngresado < totalACobrar && modoPago === 'mixto') {
+          notificar(`FALTAN ${formatPeso(totalACobrar - totalIngresado)}`, "error");
+          setProcesandoPago(false);
+          return;
+        }
+
+        const datosPago = {
+          estado_pago: 'Pagado',
+          metodo_pago: metodoGeneral,
+          detalles_pago: metodosFinales,
+          descuento: Number(montoDescuento) || 0,
+          total_pagado: Number(totalIngresado) || 0,
+          fecha_pago: Timestamp.now()
+        };
+
+        const pedidoRef = doc(db, colOrdenes, String(p.id));
         await updateDoc(pedidoRef, datosPago);
+
+        if (wasPaid) {
+            await addDoc(collection(db, colMovimientos), {
+                tipo: 'egreso',
+                categoria: 'ANULACION',
+                monto: Number(p.total_pagado) || Number(p.total) || 0,
+                descripcion: `REEMPLAZO PAGO PEDIDO #${p.numero_pedido || 'S/N'}`,
+                metodo: String(p.metodo_pago || 'Otro'),
+                fecha: Timestamp.now(),
+                usuario_id: user?.uid || 'anonimo',
+                pedido_id: String(p.id || '')
+            });
+        }
 
         const movRef = collection(db, colMovimientos);
         for (const item of metodosFinales) {
             await addDoc(movRef, {
                 tipo: 'ingreso',
                 categoria: 'VENTA',
-                monto: item.monto,
-                descripcion: `VENTA PEDIDO #${p.numero_pedido}${aplicarDescuento ? ' (DESC 10%)' : ''}`,
-                metodo: item.metodo,
+                monto: Number(item.monto) || 0, 
+                descripcion: `VENTA PEDIDO #${p.numero_pedido || 'S/N'}${aplicarDescuento ? ' (DESC 10%)' : ''}`,
+                metodo: String(item.metodo),
                 fecha: Timestamp.now(),
-                usuario_id: user.uid,
-                pedido_id: p.id
+                usuario_id: user?.uid || 'anonimo', 
+                pedido_id: String(p.id || '')
             });
         }
 
         notificar(`PAGO REGISTRADO CORRECTAMENTE`, "success");
+        setPedidoParaCobrar(null);
+        setAplicarDescuento(false);
 
     } catch (err) {
         console.error("Error sincronización pago:", err);
         notificar("ERROR AL REGISTRAR PAGO", "error");
     } finally {
-        setPedidoParaCobrar(null);
-        setAplicarDescuento(false);
         setProcesandoPago(false);
     }
   };
@@ -371,9 +434,10 @@ export default function HistorialPedidos({ onEditar, user }) {
     if (!window.confirm(`¿Quieres quitar el pago del pedido #${pedidoParaCobrar.numero_pedido}?`)) return;
 
     const p = pedidoParaCobrar;
+    setProcesandoPago(true); 
     
     try {
-        await updateDoc(doc(db, colOrdenes, p.id), {
+        await updateDoc(doc(db, colOrdenes, String(p.id)), {
             estado_pago: 'Pendiente',
             metodo_pago: 'N/A',
             detalles_pago: [],
@@ -385,27 +449,39 @@ export default function HistorialPedidos({ onEditar, user }) {
         await addDoc(collection(db, colMovimientos), {
             tipo: 'egreso',
             categoria: 'ANULACION',
-            monto: p.total_pagado || p.total,
-            descripcion: `ANULACIÓN PAGO PEDIDO #${p.numero_pedido}`,
-            metodo: p.metodo_pago || 'Otro',
+            monto: Number(p.total_pagado) || Number(p.total) || 0,
+            descripcion: `ANULACIÓN PAGO PEDIDO #${p.numero_pedido || 'S/N'}`,
+            metodo: String(p.metodo_pago || 'Otro'),
             fecha: Timestamp.now(),
-            usuario_id: user.uid,
-            pedido_id: p.id
+            usuario_id: user?.uid || 'anonimo',
+            pedido_id: String(p.id || '')
         });
 
         setPedidoParaCobrar(null);
         setAplicarDescuento(false);
         notificar(`PAGO ANULADO CORRECTAMENTE`, "success");
     } catch (e) {
-        console.error(e);
+        console.error("Error al anular pago:", e);
         notificar("ERROR AL ANULAR PAGO", "error");
+    } finally {
+        setProcesandoPago(false); 
     }
   };
 
+  // --- NUEVA LÓGICA DE ENTREGA (CON BLOQUEO SI NO ESTÁ PAGADO) ---
   const toggleEstado = async (pedido) => {
-    const nuevoEstado = pedido.estado === 'entregado' ? 'pendiente' : 'entregado';
+    const isPaid = String(pedido.estado_pago || '').toLowerCase().trim() === 'pagado';
+    const isDelivered = String(pedido.estado || '').toLowerCase().trim() === 'entregado';
+    const nuevoEstado = isDelivered ? 'pendiente' : 'entregado';
+
+    // CANDADO DE SEGURIDAD 1: Validación lógica
+    if (nuevoEstado === 'entregado' && !isPaid) {
+        notificar("NO SE PUEDE ENTREGAR: EL PEDIDO AÚN NO HA SIDO COBRADO", "error");
+        return;
+    }
+
     try {
-      await updateDoc(doc(db, colOrdenes, pedido.id), { estado: nuevoEstado });
+      await updateDoc(doc(db, colOrdenes, String(pedido.id)), { estado: nuevoEstado });
       const msg = nuevoEstado === 'entregado' 
         ? `PEDIDO #${pedido.numero_pedido} ENTREGADO CORRECTAMENTE` 
         : `PEDIDO #${pedido.numero_pedido} DEVUELTO A PENDIENTE CORRECTAMENTE`;
@@ -416,51 +492,93 @@ export default function HistorialPedidos({ onEditar, user }) {
     }
   };
 
-  // Variable de apoyo para la UI del cobro en el modal
-  const subtotalProductosModal = pedidoParaCobrar?.items?.reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0) || 0;
+  const subtotalProductosModal = (pedidoParaCobrar?.items || []).reduce((acc, item) => acc + ((Number(item.precio) || 0) * (Number(item.cantidad) || 0)), 0);
   const descuentoUI = aplicarDescuento ? Math.round(subtotalProductosModal * 0.1) : 0;
+  
+  const isMetodoSeleccionado = modoPago === 'unico' 
+    ? metodoUnico !== '' 
+    : Object.values(montosMixtos).some(v => getRawNumber(v) > 0);
+
+  const pedidosFiltrados = pedidos
+    .filter(p => filtroEstado === 'todos' || String(p.estado).toLowerCase() === filtroEstado.toLowerCase())
+    .filter(p => {
+        if (!busqueda) return true;
+        const searchLower = busqueda.toLowerCase();
+        
+        const matchNombre = String(p.nombre_cliente || '').toLowerCase().includes(searchLower);
+        const matchNumero = String(p.numero_pedido || '').includes(searchLower);
+        
+        const matchItems = p.items && p.items.some(item => 
+            String(item.nombre || '').toLowerCase().includes(searchLower) ||
+            String(item.observacion || '').toLowerCase().includes(searchLower) ||
+            String(item.descripcion || '').toLowerCase().includes(searchLower)
+        );
+
+        const matchNotas = String(p.descripcion || '').toLowerCase().includes(searchLower) || 
+                           String(p.nota_personal || '').toLowerCase().includes(searchLower) ||
+                           String(p.direccion || '').toLowerCase().includes(searchLower);
+
+        return matchNombre || matchNumero || matchItems || matchNotas;
+    });
 
   return (
     <div className="p-6 h-full overflow-y-auto bg-slate-100 font-sans text-gray-800 relative">
       
-      {/* --- NOTIFICACIÓN MOVIDA A LA ESQUINA INFERIOR DERECHA --- */}
       {notificacion.mostrar && (
         <div className={`fixed bottom-4 right-4 z-[100000] px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 transition-all duration-500 ${notificacion.tipo === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`} style={{ animation: 'slideIn 0.3s ease-out forwards' }}>
             <span className="text-2xl">{notificacion.tipo === 'error' ? '🚫' : '✅'}</span>
             <div>
-                <h4 className="font-black uppercase text-xs opacity-75">{notificacion.tipo === 'error' ? 'Error' : 'Éxito'}</h4>
+                <h4 className="font-black uppercase text-xs opacity-75">{notificacion.tipo === 'error' ? 'Error' : 'Atención'}</h4>
                 <p className="font-bold text-sm leading-tight">{notificacion.mensaje}</p>
             </div>
         </div>
       )}
 
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+      <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-8">
         <div>
           <h2 className="text-3xl font-black uppercase tracking-tighter text-slate-900 m-0 leading-none">Ventas Registradas</h2>
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Gestión Histórica • {pedidos.length} Pedidos</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-3xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-2 px-3 border-r border-slate-100">
-            <i className="bi bi-calendar-event text-red-500"></i>
+        <div className="flex flex-col sm:flex-row flex-wrap items-center gap-3 w-full xl:w-auto">
+          <div className="relative group w-full sm:w-auto flex-1 md:min-w-[320px]">
+            <i className="bi bi-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-red-500 transition-colors text-sm"></i>
             <input 
-              type="date" 
-              className="outline-none text-[11px] font-black uppercase text-slate-700 bg-transparent cursor-pointer"
-              value={fechaFiltro}
-              onChange={(e) => setFechaFiltro(e.target.value)}
+                type="text" 
+                placeholder="BUSCAR CLIENTE, N° ORDEN O PRODUCTO..." 
+                className="w-full pl-10 pr-10 py-3 rounded-3xl border-2 border-slate-100 bg-white font-black uppercase text-[10px] outline-none focus:border-red-300 focus:shadow-md transition-all placeholder:text-slate-300 shadow-sm"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
             />
+            {busqueda && (
+                <button onClick={() => setBusqueda('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-red-500 transition-colors text-lg leading-none">
+                    <i className="bi bi-x-circle-fill"></i>
+                </button>
+            )}
           </div>
 
-          <div className="flex gap-1">
-            {['todos', 'pendiente', 'entregado'].map(f => (
-              <button 
-                key={f} 
-                onClick={() => setFiltroEstado(f)} 
-                className={`px-5 py-2 rounded-2xl text-[10px] font-black uppercase transition-all ${filtroEstado === f ? 'bg-slate-900 text-white shadow-md' : 'text-gray-400 hover:text-slate-600'}`}
-              >
-                {f === 'todos' ? 'Ver Todos' : f}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-3xl shadow-sm border border-slate-200 w-full sm:w-auto">
+            <div className="flex items-center gap-2 px-3 border-r border-slate-100">
+              <i className="bi bi-calendar-event text-red-500"></i>
+              <input 
+                type="date" 
+                className="outline-none text-[11px] font-black uppercase text-slate-700 bg-transparent cursor-pointer"
+                value={fechaFiltro}
+                onChange={(e) => setFechaFiltro(e.target.value)}
+              />
+            </div>
+
+            <div className="flex gap-1">
+              {['todos', 'pendiente', 'entregado'].map(f => (
+                <button 
+                  key={f} 
+                  onClick={() => setFiltroEstado(f)} 
+                  className={`px-5 py-2 rounded-2xl text-[10px] font-black uppercase transition-all ${filtroEstado === f ? 'bg-slate-900 text-white shadow-md' : 'text-gray-400 hover:text-slate-600'}`}
+                >
+                  {f === 'todos' ? 'Ver Todos' : f}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -469,11 +587,9 @@ export default function HistorialPedidos({ onEditar, user }) {
         <div className="py-20 text-center font-black text-slate-300 animate-pulse uppercase tracking-widest text-xs">Cargando datos del servidor...</div>
       ) : (
         <div className="grid gap-4 pb-32">
-          {pedidos
-            .filter(p => filtroEstado === 'todos' || String(p.estado).toLowerCase() === filtroEstado.toLowerCase())
-            .map(pedido => {
-              const isPaid = String(pedido.estado_pago || '').toLowerCase() === 'pagado';
-              const isDelivered = String(pedido.estado).toLowerCase() === 'entregado';
+          {pedidosFiltrados.map(pedido => {
+              const isPaid = String(pedido.estado_pago || '').toLowerCase().trim() === 'pagado';
+              const isDelivered = String(pedido.estado || '').toLowerCase().trim() === 'entregado';
               
               return (
                 <div key={pedido.id} className={`p-6 rounded-[2.5rem] border-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between bg-white transition-all ${isDelivered ? 'border-emerald-500/20' : 'border-amber-400/20'}`}>
@@ -501,7 +617,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                                         <span>{item.nombre}</span>
                                     </div>
                                     {item.descripcion && <span className="text-[8px] text-slate-400 font-bold ml-10 italic lowercase">({item.descripcion})</span>}
-                                    {item.observacion && <span className="text-[8px] text-blue-600 ml-10 italic lowercase">↳ {item.observacion}</span>}
+                                    {item.observacion && <span className="text-[8px] text-blue-600 ml-10 italic lowercase whitespace-pre-wrap">↳ {item.observacion}</span>}
                                 </div>
                             </div>
                         ))}
@@ -510,7 +626,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                       {pedido.descripcion && (
                         <div className="mt-2 p-2.5 bg-amber-50 border border-amber-100 rounded-xl max-w-md">
                             <span className="text-[8px] font-black text-amber-600 uppercase tracking-widest block mb-0.5">Observaciones de Cocina:</span>
-                            <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.descripcion}</p>
+                            <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic whitespace-pre-wrap">{pedido.descripcion}</p>
                         </div>
                       )}
 
@@ -525,7 +641,7 @@ export default function HistorialPedidos({ onEditar, user }) {
                             {pedido.nota_personal && (
                                 <div className="mt-1 pt-1 border-t border-blue-100/50">
                                     <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest block mb-0.5">Nota:</span>
-                                    <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic">{pedido.nota_personal}</p>
+                                    <p className="text-[10px] font-bold text-slate-700 m-0 uppercase leading-tight italic whitespace-pre-wrap">{pedido.nota_personal}</p>
                                 </div>
                             )}
                           </div>
@@ -573,18 +689,36 @@ export default function HistorialPedidos({ onEditar, user }) {
                         <i className="bi bi-trash3"></i>
                       </button>
 
+                      {/* CANDADO DE SEGURIDAD 2: El botón detiene la acción antes de enviarla si no está pagado */}
                       <button 
-                        onClick={() => toggleEstado(pedido)} 
-                        className={`px-4 h-11 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${isDelivered ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-amber-600 border-amber-200'}`}
+                        onClick={() => {
+                            const pagado = String(pedido.estado_pago || '').toLowerCase().trim() === 'pagado';
+                            const entregado = String(pedido.estado || '').toLowerCase().trim() === 'entregado';
+                            if (!entregado && !pagado) {
+                                notificar("NO SE PUEDE ENTREGAR: EL PEDIDO AÚN NO HA SIDO COBRADO", "error");
+                                return;
+                            }
+                            toggleEstado(pedido);
+                        }} 
+                        className={`px-4 h-11 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${isDelivered ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-amber-600 border-amber-200'} ${!isPaid && !isDelivered ? 'opacity-50' : 'hover:shadow-md'}`}
+                        title={!isPaid && !isDelivered ? 'Debe cobrar el pedido primero' : ''}
                       >
                         {isDelivered ? 'Listo' : 'Entregar'}
                       </button>
 
                       <button onClick={() => {
                         setPedidoParaCobrar(pedido);
-                        setModoPago('unico');
-                        setAplicarDescuento(false);
-                        setMontosMixtos({ Efectivo: '', Transferencia: '', Débito: '' });
+                        if (!isPaid) {
+                            setModoPago('unico');
+                            setMetodoUnico(''); 
+                            setAplicarDescuento((pedido.descuento || 0) > 0); 
+                            setMontosMixtos({ Efectivo: '', Transferencia: '', Débito: '' });
+                            setMetodosHabilitados({ Efectivo: true, Transferencia: false, Débito: false });
+                        } else {
+                            setModoPago(pedido.metodo_pago === 'Mixto' ? 'mixto' : 'unico');
+                            setMetodoUnico(pedido.metodo_pago !== 'Mixto' ? pedido.metodo_pago : '');
+                            setAplicarDescuento((pedido.descuento || 0) > 0);
+                        }
                       }} className={`px-5 h-11 rounded-xl text-[10px] font-black uppercase shadow-lg active:scale-95 transition-all ${isPaid ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-900 text-white'}`}>
                         {isPaid ? 'Pago' : 'Cobrar'}
                       </button>
@@ -593,6 +727,12 @@ export default function HistorialPedidos({ onEditar, user }) {
                 </div>
               );
             })}
+
+            {pedidosFiltrados.length === 0 && (
+                <div className="col-span-full py-20 text-center text-slate-300 font-black uppercase text-xs tracking-[0.3em]">
+                    No se encontraron pedidos
+                </div>
+            )}
         </div>
       )}
 
@@ -646,11 +786,11 @@ export default function HistorialPedidos({ onEditar, user }) {
                 <div className="bg-slate-50 p-6 rounded-[2rem] border-2 border-slate-100 text-center relative overflow-hidden">
                     <div className="flex flex-col items-center">
                         <span className="text-4xl font-black text-slate-900 tracking-tighter">
-                            {formatPeso(pedidoParaCobrar.total - descuentoUI)}
+                            {formatPeso((Number(pedidoParaCobrar?.total) || 0) - descuentoUI)}
                         </span>
                         {aplicarDescuento && (
                             <span className="text-[10px] font-black text-red-500 uppercase mt-1 line-through opacity-50">
-                                Original: {formatPeso(pedidoParaCobrar.total)}
+                                Original: {formatPeso(pedidoParaCobrar?.total || 0)}
                             </span>
                         )}
                     </div>
@@ -668,7 +808,13 @@ export default function HistorialPedidos({ onEditar, user }) {
             {modoPago === 'unico' ? (
                 <div className="grid grid-cols-3 gap-2 mb-8">
                     {['Efectivo', 'Transferencia', 'Débito'].map(m => (
-                        <button key={m} onClick={() => setMetodoUnico(m)} className={`py-4 rounded-2xl font-black text-[10px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}>{m}</button>
+                        <button 
+                            key={m} 
+                            onClick={() => setMetodoUnico(metodoUnico === m ? '' : m)} 
+                            className={`py-4 rounded-2xl font-black text-[10px] border-2 uppercase transition-all ${metodoUnico === m ? 'border-red-600 bg-red-50 text-red-600' : 'border-gray-100 text-gray-400'}`}
+                        >
+                            {m}
+                        </button>
                     ))}
                 </div>
             ) : (
@@ -698,9 +844,9 @@ export default function HistorialPedidos({ onEditar, user }) {
 
             <div className="flex flex-col gap-3">
               <div className="flex gap-3">
-                <button onClick={() => { setPedidoParaCobrar(null); setAplicarDescuento(false); }} className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Cancelar</button>
-                <button onClick={confirmarPago} disabled={procesandoPago} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl active:scale-95 flex items-center justify-center gap-2">
-                  {procesandoPago ? 'Guardando...' : 'Confirmar Cobro'}
+                <button onClick={() => { setPedidoParaCobrar(null); setAplicarDescuento(false); }} className="flex-1 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-slate-50 rounded-2xl">Cancelar</button>
+                <button onClick={confirmarPago} disabled={procesandoPago} className="flex-[2] py-4 bg-green-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-xl hover:bg-green-700 active:scale-95 transition-all">
+                  {isMetodoSeleccionado ? 'Confirmar Cobro' : 'Guardar y Dejar Pendiente'}
                 </button>
               </div>
               
@@ -724,7 +870,7 @@ export default function HistorialPedidos({ onEditar, user }) {
         <div className="hidden print:block fixed inset-0 bg-white z-[10000]">
             <Ticket 
                 orden={pedidoActivoParaImprimir.items} 
-                total={pedidoActivoParaImprimir.total_pagado || pedidoActivoParaImprimir.total} 
+                total={pedidoActivoParaImprimir.total} 
                 numeroPedido={pedidoActivoParaImprimir.numero_pedido} 
                 tipoEntrega={pedidoActivoParaImprimir.tipo_entrega} 
                 fecha={pedidoActivoParaImprimir.fechaString?.split('-').reverse().join('/')} 
